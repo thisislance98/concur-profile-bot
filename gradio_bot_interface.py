@@ -1019,15 +1019,19 @@ def main():
     """Main function to start the Gradio interface"""
     print("🚀 Starting Concur Profile Bot Web Interface...")
     
+    # Get port from environment (Railway sets this automatically)
+    port = int(os.getenv("PORT", 7860))
+    host = os.getenv("HOST", "0.0.0.0")
+    
     # Check environment variables
     if not CLAUDE_API_KEY:
         print("❌ Error: ANTHROPIC_API_KEY not found in environment variables")
-        print("Please set the ANTHROPIC_API_KEY in your .env_tools file")
+        print("Please set the ANTHROPIC_API_KEY in your environment")
         return
     
     if not all([CONCUR_CLIENT_ID, CONCUR_CLIENT_SECRET, CONCUR_USERNAME, CONCUR_PASSWORD]):
         print("❌ Error: Concur API credentials not found in environment variables")
-        print("Please ensure all required Concur API credentials are set in .env_tools")
+        print("Please ensure all required Concur API credentials are set in environment")
         return
     
     # Initialize systems
@@ -1052,17 +1056,17 @@ def main():
     interface = create_interface()
     
     print("🎉 Launching Concur Profile Bot!")
-    print("📱 The web interface will open in your browser")
-    print("🔗 You can also access it at: http://localhost:7860")
+    print(f"📱 The web interface will be available at: {host}:{port}")
     print("🔄 Auto-reload: Restart the script manually when you make changes")
     
+    # Railway-friendly launch configuration
     interface.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_name=host,
+        server_port=port,
         share=False,
         show_error=True,
         quiet=False,
-        inbrowser=True
+        inbrowser=False  # Don't try to open browser in production
     )
 
 if __name__ == "__main__":
