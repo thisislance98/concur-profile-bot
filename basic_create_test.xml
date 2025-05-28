@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ProfileResponse xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Action="Create" LoginId="curl_test_basic_20250522@sdktest.example.com">
+  <General>
+    <FirstName>Basic</FirstName>
+    <LastName>TestUser</LastName>
+    <RuleClass>Default Travel Class</RuleClass>
+    <TravelConfigID>250027436</TravelConfigID>
+  </General>
+  <Password>BasicTest123!</Password>
+</ProfileResponse> 
