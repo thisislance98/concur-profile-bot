@@ -1,6 +1,7 @@
 # Environment variables and secrets
 .env
 .env_tools
+.env_
 *.env
 access_token.txt
 *token*
