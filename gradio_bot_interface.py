@@ -19,15 +19,16 @@ import time
 # Add the current directory to path to import the bot modules
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Import the Concur Profile SDK
-from concur_profile_sdk_improved import (
-    ConcurProfileSDK, UserProfile, Address, Phone, Email, EmergencyContact,
-    AirPreferences, HotelPreferences, CarPreferences, RailPreferences,
-    LoyaltyProgram, RatePreference, DiscountCode,
-    AddressType, PhoneType, EmailType, LoyaltyProgramType,
+# Import the Concur Profile SDK - Updated for Identity v4 + Travel Profile v2
+from concur_profile_sdk import (
+    ConcurSDK, IdentityUser, IdentityName, IdentityEmail, TravelProfile,
+    AirPreferences, HotelPreferences, CarPreferences, RailPreferences, 
+    LoyaltyProgram, RatePreference, DiscountCode, CustomField,
+    AddressType, PhoneType, EmailType, LoyaltyProgramType, VisaType,
     SeatPreference, SeatSection, MealType, HotelRoomType, SmokingPreference,
     CarType, TransmissionType,
-    ConcurProfileError, AuthenticationError, ProfileNotFoundError, ValidationError
+    ConcurProfileError, AuthenticationError, ProfileNotFoundError, ValidationError,
+    IdentityPhoneNumber, IdentityEnterpriseInfo
 )
 
 # Load credentials from .env file
@@ -51,187 +52,175 @@ conversation_history = []
 
 # System prompt for Claude
 SYSTEM_PROMPT = """
-You are a helpful assistant that can retrieve and update Concur profile information for users using the Concur Profile SDK.
-You can help users access and modify their travel profiles using natural language requests.
+You are a helpful assistant that can retrieve and update Concur profile information using the modern Concur SDK
+with Identity v4 + Travel Profile v2 architecture.
+
+# Modern SDK Architecture
+The SDK uses two complementary APIs:
+- **Identity v4**: User identity, contact info, enterprise data (SCIM 2.0 compliant)
+- **Travel Profile v2**: Travel preferences, documents, loyalty programs, travel-specific data
 
 # Available Tool Calls
-You have access to the following tool calls that use the Concur Profile SDK:
 
-## get_profile
-Retrieves the user's complete profile information from Concur using the SDK.
-- If no login_id is provided, gets the current authenticated user's profile
-- Returns comprehensive profile data including basic info, travel preferences, loyalty programs, etc.
+## get_user_identity
+Retrieves user identity information from Identity v4 API using the SDK.
+- If no user_id or username is provided, gets the current authenticated user's identity
+- Returns user identity data: name, title, emails, phone numbers, enterprise info
+- Handles both user authentication and client credentials contexts
 
-## update_profile
-Updates basic profile fields like name, job title, company information using the SDK.
-- Updates are applied using the SDK's robust update mechanism
-- Handles XML schema compliance automatically
+## get_travel_profile
+Retrieves travel profile information from Travel Profile v2 API using the SDK.
+- Requires login_id for client credentials authentication
+- Returns complete travel data: preferences, documents, loyalty programs, TSA info
+- Includes passports, visas, national IDs, driver's licenses
 
-## update_contact_info
-Updates contact information (addresses, phones, emails) using the SDK.
-- Supports multiple address types (Home, Work)
-- Supports multiple phone types (Home, Work, Cell, etc.)
-- Supports multiple email types (Business, Personal, etc.)
+## create_user_identity
+Creates a new user identity via Identity v4 API using the SDK.
+- Requires user_name, given_name, and family_name (minimum)
+- Supports comprehensive identity data including enterprise information
+- **Note**: May be restricted in some environments due to permission requirements
+
+## update_travel_profile
+Updates basic travel profile information via Travel Profile v2 API.
+- Updates rule_class, travel_config_id
+- Requires login_id for client credentials authentication
 
 ## update_travel_preferences
-Updates travel preferences using the SDK.
-- Air preferences: seat position, section, meal preferences, home airport
-- Hotel preferences: room type, amenities (gym, pool, room service, etc.)
-- Car preferences: type, transmission, GPS, smoking preference
-- Note: The SDK handles complex car preference updates automatically
+Updates travel preferences (Air, Hotel, Car, Rail) via Travel Profile v2 API.
+- Air: seat position, section, meal preferences, home airport
+- Hotel: room type, amenities (gym, pool, room service, etc.)
+- Car: type, transmission, GPS, smoking preference
+- **Note**: Uses validation-compliant values and avoids problematic fields
 
 ## update_loyalty_program
-Updates loyalty program information using the SDK's dedicated Loyalty v1 API.
-- Supports Air, Hotel, Car, and Rail programs
-- IMPORTANT: This functionality has API restrictions - only available to travel suppliers who have completed SAP Concur application review
-- The SDK will handle the API restrictions gracefully
+Updates loyalty program information via Loyalty v1 API.
+- **IMPORTANT**: Highly restricted API - typically only available to travel suppliers
+- XML generation always works, but API updates may fail due to permissions
+- Programs appear as AdvantageMemberships in XML, not LoyaltyPrograms
 
-## list_profile_summaries
-Lists profile summaries with pagination using the SDK.
-- Gets profiles modified within a specified time period
-- Supports pagination and filtering
+# Authentication Context Detection
+The SDK automatically detects authentication type:
 
-# SDK Features and Benefits
-The SDK provides:
-- Automatic authentication and token management
-- XML schema compliance
-- Comprehensive error handling
-- Type safety with enums and dataclasses
-- Proper field ordering for API requirements
-- Automatic retry logic for certain operations
+**User Authentication:**
+- Can use current user methods without login_id
+- Provides user-specific context
+- Can call get_user_identity() without parameters
 
-# Important Notes
-1. The SDK handles all the complex XML generation and API communication
-2. Car preferences are updated individually by the SDK to handle API limitations
-3. Loyalty program updates may fail due to API restrictions (this is expected)
-4. The SDK automatically waits for user availability after creation
-5. All enum values are validated by the SDK
+**Client Credentials Authentication:**
+- Company-level access without user context
+- Requires login_id for all travel profile operations
+- Cannot use current user methods
 
-When helping users:
-- Use the appropriate tool for their request
-- Explain any limitations (especially for loyalty programs)
-- Confirm successful updates
-- Handle errors gracefully and explain what went wrong
+# Key Features
+- **Separation of Concerns**: Identity data vs Travel data are managed separately
+- **Permission-Aware**: Operations adapt to available permissions
+- **XML Validation**: Follows exact schema requirements discovered through testing  
+- **Field Validation**: Avoids known problematic fields that cause API errors
+- **Date Handling**: Proper date parsing for documents and TSA info
 
-Be conversational and helpful in your responses.
+Be conversational and helpful. Explain any limitations clearly. When API restrictions occur, 
+explain that this is often expected behavior based on authentication type and permissions.
 """
 
-# Tool definitions for Claude - Updated to match SDK capabilities
+# Tool definitions for Claude - Updated for Identity v4 + Travel Profile v2 architecture
 tools = [
     {
-        "name": "get_profile",
-        "description": "Retrieves the user's profile information from Concur using the SDK",
+        "name": "get_user_identity",
+        "description": "Retrieves user identity information from Identity v4 API using the SDK",
         "input_schema": {
             "type": "object",
             "properties": {
-                "login_id": {
+                "user_id": {
                     "type": "string",
-                    "description": "Optional login ID to get specific user profile. If not provided, gets current user."
+                    "description": "Optional user ID to get specific user identity. If not provided, gets current user."
+                },
+                "username": {
+                    "type": "string", 
+                    "description": "Optional username to search for user identity."
                 }
             }
         }
     },
     {
-        "name": "update_profile",
-        "description": "Updates specific fields in the user's Concur profile using the SDK",
+        "name": "get_travel_profile",
+        "description": "Retrieves travel profile information from Travel Profile v2 API using the SDK",
         "input_schema": {
             "type": "object",
             "properties": {
                 "login_id": {
                     "type": "string",
-                    "description": "Login ID of user to update. If not provided, updates current user."
+                    "description": "Login ID to get travel profile for. Required for client credentials auth."
+                }
+            }
+        }
+    },
+    {
+        "name": "create_user_identity",
+        "description": "Creates a new user identity via Identity v4 API using the SDK",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_name": {
+                    "type": "string",
+                    "description": "Username/email for the new user"
                 },
-                "first_name": {
+                "given_name": {
                     "type": "string",
                     "description": "User's first name"
                 },
-                "last_name": {
-                    "type": "string",
+                "family_name": {
+                    "type": "string", 
                     "description": "User's last name"
                 },
                 "middle_name": {
                     "type": "string",
                     "description": "User's middle name"
                 },
-                "job_title": {
+                "display_name": {
+                    "type": "string",
+                    "description": "User's display name"
+                },
+                "title": {
                     "type": "string",
                     "description": "User's job title"
                 },
-                "company_name": {
+                "email": {
                     "type": "string",
-                    "description": "User's company name"
+                    "description": "User's primary email address"
                 },
-                "employee_id": {
+                "phone": {
                     "type": "string",
-                    "description": "User's employee ID"
+                    "description": "User's primary phone number"
                 },
-                "medical_alerts": {
+                "employee_number": {
                     "type": "string",
-                    "description": "User's medical alerts"
+                    "description": "User's employee number"
+                },
+                "department": {
+                    "type": "string",
+                    "description": "User's department"
                 }
-            }
+            },
+            "required": ["user_name", "given_name", "family_name"]
         }
     },
     {
-        "name": "update_contact_info",
-        "description": "Updates contact information (addresses, phones, emails) using the SDK",
+        "name": "update_travel_profile",
+        "description": "Updates travel profile information via Travel Profile v2 API using the SDK",
         "input_schema": {
             "type": "object",
             "properties": {
                 "login_id": {
                     "type": "string",
-                    "description": "Login ID of user to update. If not provided, updates current user."
+                    "description": "Login ID of user to update. Required for client credentials auth."
                 },
-                "address_type": {
+                "rule_class": {
                     "type": "string",
-                    "enum": ["Home", "Work"],
-                    "description": "Type of address to update"
+                    "description": "Travel rule class"
                 },
-                "street": {
+                "travel_config_id": {
                     "type": "string",
-                    "description": "Street address"
-                },
-                "city": {
-                    "type": "string",
-                    "description": "City"
-                },
-                "state_province": {
-                    "type": "string",
-                    "description": "State or province"
-                },
-                "postal_code": {
-                    "type": "string",
-                    "description": "Postal/zip code"
-                },
-                "country_code": {
-                    "type": "string",
-                    "description": "Country code (e.g., 'US')"
-                },
-                "phone_type": {
-                    "type": "string",
-                    "enum": ["Home", "Work", "Cell", "Fax", "Pager", "Other"],
-                    "description": "Type of phone number"
-                },
-                "phone_number": {
-                    "type": "string",
-                    "description": "Phone number"
-                },
-                "phone_country_code": {
-                    "type": "string",
-                    "description": "Phone country code (e.g., '1' for US)"
-                },
-                "phone_extension": {
-                    "type": "string",
-                    "description": "Phone extension"
-                },
-                "email_type": {
-                    "type": "string",
-                    "enum": ["Business", "Personal", "Supervisor", "TravelArranger", "Business2", "Other1", "Other2"],
-                    "description": "Type of email address"
-                },
-                "email_address": {
-                    "type": "string",
-                    "description": "Email address"
+                    "description": "Travel configuration ID"
                 }
             }
         }
@@ -267,7 +256,7 @@ tools = [
                 },
                 "air_other": {
                     "type": "string",
-                    "description": "Other air preferences"
+                    "description": "Other air preferences - use simple descriptive text (e.g., 'Prefer early morning flights'). Avoid timestamps or special characters to prevent validation errors."
                 },
                 "hotel_room_type": {
                     "type": "string",
@@ -276,7 +265,7 @@ tools = [
                 },
                 "hotel_other": {
                     "type": "string",
-                    "description": "Other hotel preferences"
+                    "description": "Other hotel preferences - use simple descriptive text (e.g., 'Late checkout preferred'). Keep text simple to avoid validation issues."
                 },
                 "hotel_prefer_foam_pillows": {
                     "type": "boolean",
@@ -370,38 +359,13 @@ tools = [
                 "segment_total": {
                     "type": "string",
                     "description": "Total segments in the program"
+                },
+                "expiration_date": {
+                    "type": "string",
+                    "description": "Expiration date of the loyalty program"
                 }
             },
             "required": ["program_type", "vendor_code", "account_number"]
-        }
-    },
-    {
-        "name": "list_profile_summaries",
-        "description": "Lists profile summaries with pagination using the SDK",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "days_back": {
-                    "type": "integer",
-                    "description": "Number of days back to look for modified profiles (default: 30)",
-                    "default": 30
-                },
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default: 1)",
-                    "default": 1
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Number of profiles per page (max: 200, default: 50)",
-                    "default": 50
-                },
-                "active_only": {
-                    "type": "boolean",
-                    "description": "Only return active users (default: true)",
-                    "default": True
-                }
-            }
         }
     }
 ]
@@ -410,16 +374,16 @@ def initialize_sdk():
     """Initialize the Concur Profile SDK"""
     global sdk
     try:
-        sdk = ConcurProfileSDK(
+        sdk = ConcurSDK(
             client_id=CONCUR_CLIENT_ID,
             client_secret=CONCUR_CLIENT_SECRET,
             username=CONCUR_USERNAME,
             password=CONCUR_PASSWORD,
             base_url=CONCUR_BASE_URL
         )
-        # Test authentication
-        profile = sdk.get_current_user_profile()
-        return True, f"Connected as: {profile.first_name} {profile.last_name}"
+        # Test authentication by getting current user identity
+        identity = sdk.get_current_user_identity()
+        return True, f"Connected as: {identity.display_name}"
     except Exception as e:
         return False, f"Failed to initialize SDK: {e}"
 
@@ -435,8 +399,8 @@ def initialize_claude():
 def get_current_user_login_id():
     """Get the current user's login ID"""
     try:
-        profile = sdk.get_current_user_profile()
-        return profile.login_id
+        identity = sdk.get_current_user_identity()
+        return identity.user_name
     except Exception as e:
         print(f"Error getting current user login ID: {e}")
         return None
@@ -456,185 +420,179 @@ def tool_handler(tool_calls):
         result = None
         
         try:
-            if tool_name == "get_profile":
-                login_id = tool_input.get("login_id")
-                if login_id:
-                    profile = sdk.get_profile_by_login_id(login_id)
-                else:
-                    profile = sdk.get_current_user_profile()
+            if tool_name == "get_user_identity":
+                user_id = tool_input.get("user_id")
+                username = tool_input.get("username")
                 
-                # Convert profile to dictionary for JSON serialization
+                if user_id:
+                    identity = sdk.get_user_identity_by_id(user_id)
+                elif username:
+                    identity = sdk.find_user_by_username(username)
+                else:
+                    identity = sdk.get_current_user_identity()
+                
+                if identity:
+                    # Convert identity to dictionary for JSON serialization
+                    result = {
+                        "id": identity.id,
+                        "user_name": identity.user_name,
+                        "display_name": identity.display_name,
+                        "title": identity.title,
+                        "active": identity.active,
+                        "given_name": identity.name.given_name if identity.name else "",
+                        "family_name": identity.name.family_name if identity.name else "",
+                        "middle_name": identity.name.middle_name if identity.name else "",
+                        "emails": [
+                            {
+                                "value": email.value,
+                                "type": email.type,
+                                "primary": email.primary
+                            } for email in identity.emails
+                        ],
+                        "phone_numbers": [
+                            {
+                                "value": phone.value,
+                                "type": phone.type,
+                                "primary": phone.primary
+                            } for phone in identity.phone_numbers
+                        ],
+                        "enterprise_info": {
+                            "company_id": identity.enterprise_info.company_id if identity.enterprise_info else "",
+                            "employee_number": identity.enterprise_info.employee_number if identity.enterprise_info else "",
+                            "department": identity.enterprise_info.department if identity.enterprise_info else ""
+                        } if identity.enterprise_info else None
+                    }
+                else:
+                    result = {"error": "User not found"}
+            
+            elif tool_name == "get_travel_profile":
+                login_id = tool_input.get("login_id")
+                if not login_id:
+                    login_id = get_current_user_login_id()
+                    
+                if not login_id:
+                    result = {"error": "Login ID is required for travel profile access"}
+                else:
+                    travel_profile = sdk.get_travel_profile(login_id)
+                    
+                    # Convert travel profile to dictionary
+                    result = {
+                        "login_id": travel_profile.login_id,
+                        "rule_class": travel_profile.rule_class,
+                        "travel_config_id": travel_profile.travel_config_id,
+                        "air_preferences": {
+                            "seat_preference": travel_profile.air_preferences.seat_preference.value if travel_profile.air_preferences and travel_profile.air_preferences.seat_preference else None,
+                            "seat_section": travel_profile.air_preferences.seat_section.value if travel_profile.air_preferences and travel_profile.air_preferences.seat_section else None,
+                            "meal_preference": travel_profile.air_preferences.meal_preference.value if travel_profile.air_preferences and travel_profile.air_preferences.meal_preference else None,
+                            "home_airport": travel_profile.air_preferences.home_airport if travel_profile.air_preferences else None,
+                            "air_other": travel_profile.air_preferences.air_other if travel_profile.air_preferences else None
+                        } if travel_profile.air_preferences else None,
+                        "hotel_preferences": {
+                            "room_type": travel_profile.hotel_preferences.room_type.value if travel_profile.hotel_preferences and travel_profile.hotel_preferences.room_type else None,
+                            "hotel_other": travel_profile.hotel_preferences.hotel_other if travel_profile.hotel_preferences else None,
+                            "prefer_foam_pillows": travel_profile.hotel_preferences.prefer_foam_pillows if travel_profile.hotel_preferences else None,
+                            "prefer_gym": travel_profile.hotel_preferences.prefer_gym if travel_profile.hotel_preferences else None,
+                            "prefer_pool": travel_profile.hotel_preferences.prefer_pool if travel_profile.hotel_preferences else None,
+                            "prefer_room_service": travel_profile.hotel_preferences.prefer_room_service if travel_profile.hotel_preferences else None,
+                            "prefer_early_checkin": travel_profile.hotel_preferences.prefer_early_checkin if travel_profile.hotel_preferences else None
+                        } if travel_profile.hotel_preferences else None,
+                        "car_preferences": {
+                            "car_type": travel_profile.car_preferences.car_type.value if travel_profile.car_preferences and travel_profile.car_preferences.car_type else None,
+                            "transmission": travel_profile.car_preferences.transmission.value if travel_profile.car_preferences and travel_profile.car_preferences.transmission else None,
+                            "smoking_preference": travel_profile.car_preferences.smoking_preference.value if travel_profile.car_preferences and travel_profile.car_preferences.smoking_preference else None,
+                            "gps": travel_profile.car_preferences.gps if travel_profile.car_preferences else None,
+                            "ski_rack": travel_profile.car_preferences.ski_rack if travel_profile.car_preferences else None
+                        } if travel_profile.car_preferences else None,
+                        "loyalty_programs": [
+                            {
+                                "program_type": lp.program_type.value,
+                                "vendor_code": lp.vendor_code,
+                                "account_number": lp.account_number,
+                                "status": lp.status,
+                                "status_benefits": lp.status_benefits,
+                                "point_total": lp.point_total,
+                                "segment_total": lp.segment_total
+                            } for lp in travel_profile.loyalty_programs
+                        ],
+                        "passports": [
+                            {
+                                "doc_number": passport.doc_number,
+                                "nationality": passport.nationality,
+                                "issue_country": passport.issue_country,
+                                "issue_date": passport.issue_date.isoformat() if passport.issue_date else None,
+                                "expiration_date": passport.expiration_date.isoformat() if passport.expiration_date else None
+                            } for passport in travel_profile.passports
+                        ],
+                        "tsa_info": {
+                            "known_traveler_number": travel_profile.tsa_info.known_traveler_number,
+                            "gender": travel_profile.tsa_info.gender,
+                            "redress_number": travel_profile.tsa_info.redress_number,
+                            "no_middle_name": travel_profile.tsa_info.no_middle_name
+                        } if travel_profile.tsa_info else None
+                    }
+            
+            elif tool_name == "create_user_identity":
+                # Create user identity object
+                user = IdentityUser(
+                    user_name=tool_input["user_name"],
+                    display_name=tool_input.get("display_name", f"{tool_input['given_name']} {tool_input['family_name']}"),
+                    title=tool_input.get("title", ""),
+                    name=IdentityName(
+                        given_name=tool_input["given_name"],
+                        family_name=tool_input["family_name"],
+                        middle_name=tool_input.get("middle_name", "")
+                    ),
+                    emails=[
+                        IdentityEmail(value=tool_input.get("email", tool_input["user_name"]), primary=True)
+                    ] if tool_input.get("email") else [],
+                    phone_numbers=[
+                        IdentityPhoneNumber(value=tool_input["phone"], primary=True)
+                    ] if tool_input.get("phone") else [],
+                    enterprise_info=IdentityEnterpriseInfo(
+                        employee_number=tool_input.get("employee_number", ""),
+                        department=tool_input.get("department", "")
+                    )
+                )
+                
+                created_user = sdk.create_user_identity(user)
                 result = {
-                    "login_id": profile.login_id,
-                    "first_name": profile.first_name,
-                    "last_name": profile.last_name,
-                    "middle_name": profile.middle_name,
-                    "job_title": profile.job_title,
-                    "company_name": profile.company_name,
-                    "employee_id": profile.employee_id,
-                    "medical_alerts": profile.medical_alerts,
-                    "addresses": [
-                        {
-                            "type": addr.type.value,
-                            "street": addr.street,
-                            "city": addr.city,
-                            "state_province": addr.state_province,
-                            "postal_code": addr.postal_code,
-                            "country_code": addr.country_code
-                        } for addr in profile.addresses
-                    ],
-                    "phones": [
-                        {
-                            "type": phone.type.value,
-                            "phone_number": phone.phone_number,
-                            "country_code": phone.country_code,
-                            "extension": phone.extension
-                        } for phone in profile.phones
-                    ],
-                    "emails": [
-                        {
-                            "type": email.type.value,
-                            "email_address": email.email_address
-                        } for email in profile.emails
-                    ],
-                    "emergency_contacts": [
-                        {
-                            "name": ec.name,
-                            "relationship": ec.relationship,
-                            "phone": ec.phone,
-                            "mobile_phone": ec.mobile_phone,
-                            "email": ec.email
-                        } for ec in profile.emergency_contacts
-                    ],
-                    "air_preferences": {
-                        "seat_preference": profile.air_preferences.seat_preference.value if profile.air_preferences and profile.air_preferences.seat_preference else None,
-                        "seat_section": profile.air_preferences.seat_section.value if profile.air_preferences and profile.air_preferences.seat_section else None,
-                        "meal_preference": profile.air_preferences.meal_preference.value if profile.air_preferences and profile.air_preferences.meal_preference else None,
-                        "home_airport": profile.air_preferences.home_airport if profile.air_preferences else None,
-                        "air_other": profile.air_preferences.air_other if profile.air_preferences else None
-                    } if profile.air_preferences else None,
-                    "hotel_preferences": {
-                        "room_type": profile.hotel_preferences.room_type.value if profile.hotel_preferences and profile.hotel_preferences.room_type else None,
-                        "hotel_other": profile.hotel_preferences.hotel_other if profile.hotel_preferences else None,
-                        "prefer_foam_pillows": profile.hotel_preferences.prefer_foam_pillows if profile.hotel_preferences else None,
-                        "prefer_gym": profile.hotel_preferences.prefer_gym if profile.hotel_preferences else None,
-                        "prefer_pool": profile.hotel_preferences.prefer_pool if profile.hotel_preferences else None,
-                        "prefer_room_service": profile.hotel_preferences.prefer_room_service if profile.hotel_preferences else None,
-                        "prefer_early_checkin": profile.hotel_preferences.prefer_early_checkin if profile.hotel_preferences else None
-                    } if profile.hotel_preferences else None,
-                    "car_preferences": {
-                        "car_type": profile.car_preferences.car_type.value if profile.car_preferences and profile.car_preferences.car_type else None,
-                        "transmission": profile.car_preferences.transmission.value if profile.car_preferences and profile.car_preferences.transmission else None,
-                        "smoking_preference": profile.car_preferences.smoking_preference.value if profile.car_preferences and profile.car_preferences.smoking_preference else None,
-                        "gps": profile.car_preferences.gps if profile.car_preferences else None,
-                        "ski_rack": profile.car_preferences.ski_rack if profile.car_preferences else None
-                    } if profile.car_preferences else None,
-                    "loyalty_programs": [
-                        {
-                            "program_type": lp.program_type.value,
-                            "vendor_code": lp.vendor_code,
-                            "account_number": lp.account_number,
-                            "status": lp.status,
-                            "status_benefits": lp.status_benefits,
-                            "point_total": lp.point_total,
-                            "segment_total": lp.segment_total
-                        } for lp in profile.loyalty_programs
-                    ]
+                    "success": True,
+                    "message": f"User identity created successfully",
+                    "user_id": created_user.id,
+                    "user_name": created_user.user_name
                 }
             
-            elif tool_name == "update_profile":
-                login_id = tool_input.get("login_id") or get_current_user_login_id()
+            elif tool_name == "update_travel_profile":
+                login_id = tool_input.get("login_id", get_current_user_login_id())
                 if not login_id:
                     result = {"error": "Could not determine user login ID"}
                 else:
-                    # Create profile with only the fields to update
-                    profile = UserProfile(login_id=login_id)
+                    # Create travel profile with only the fields to update
+                    profile = TravelProfile(login_id=login_id)
                     fields_to_update = []
                     
-                    if "first_name" in tool_input:
-                        profile.first_name = tool_input["first_name"]
-                        fields_to_update.append("first_name")
-                    if "last_name" in tool_input:
-                        profile.last_name = tool_input["last_name"]
-                        fields_to_update.append("last_name")
-                    if "middle_name" in tool_input:
-                        profile.middle_name = tool_input["middle_name"]
-                        fields_to_update.append("middle_name")
-                    if "job_title" in tool_input:
-                        profile.job_title = tool_input["job_title"]
-                        fields_to_update.append("job_title")
-                    if "company_name" in tool_input:
-                        profile.company_name = tool_input["company_name"]
-                        fields_to_update.append("company_name")
-                    if "employee_id" in tool_input:
-                        profile.employee_id = tool_input["employee_id"]
-                        fields_to_update.append("employee_id")
-                    if "medical_alerts" in tool_input:
-                        profile.medical_alerts = tool_input["medical_alerts"]
-                        fields_to_update.append("medical_alerts")
+                    if "rule_class" in tool_input:
+                        profile.rule_class = tool_input["rule_class"]
+                        fields_to_update.append("rule_class")
+                    if "travel_config_id" in tool_input:
+                        profile.travel_config_id = tool_input["travel_config_id"]
+                        fields_to_update.append("travel_config_id")
                     
                     if fields_to_update:
-                        response = sdk.update_user(profile, fields_to_update=fields_to_update)
-                        result = {"success": True, "message": f"Updated fields: {', '.join(fields_to_update)}"}
+                        try:
+                            response = sdk.update_travel_profile(profile, fields_to_update=fields_to_update)
+                            result = {"success": True, "message": f"Updated travel profile: {', '.join(fields_to_update)}"}
+                        except Exception as update_error:
+                            result = {"error": f"Failed to update travel profile: {str(update_error)}"}
                     else:
-                        result = {"error": "No fields provided to update"}
-            
-            elif tool_name == "update_contact_info":
-                login_id = tool_input.get("login_id") or get_current_user_login_id()
-                if not login_id:
-                    result = {"error": "Could not determine user login ID"}
-                else:
-                    profile = UserProfile(login_id=login_id)
-                    fields_to_update = []
-                    
-                    # Handle address updates
-                    if any(field in tool_input for field in ["address_type", "street", "city", "state_province", "postal_code", "country_code"]):
-                        address_type = AddressType(tool_input.get("address_type", "Home"))
-                        address = Address(
-                            type=address_type,
-                            street=tool_input.get("street", ""),
-                            city=tool_input.get("city", ""),
-                            state_province=tool_input.get("state_province", ""),
-                            postal_code=tool_input.get("postal_code", ""),
-                            country_code=tool_input.get("country_code", "US")
-                        )
-                        profile.addresses = [address]
-                        fields_to_update.append("addresses")
-                    
-                    # Handle phone updates
-                    if any(field in tool_input for field in ["phone_type", "phone_number", "phone_country_code", "phone_extension"]):
-                        phone_type = PhoneType(tool_input.get("phone_type", "Work"))
-                        phone = Phone(
-                            type=phone_type,
-                            phone_number=tool_input.get("phone_number", ""),
-                            country_code=tool_input.get("phone_country_code", ""),
-                            extension=tool_input.get("phone_extension", "")
-                        )
-                        profile.phones = [phone]
-                        fields_to_update.append("phones")
-                    
-                    # Handle email updates
-                    if any(field in tool_input for field in ["email_type", "email_address"]):
-                        email_type = EmailType(tool_input.get("email_type", "Business"))
-                        email = Email(
-                            type=email_type,
-                            email_address=tool_input.get("email_address", "")
-                        )
-                        profile.emails = [email]
-                        fields_to_update.append("emails")
-                    
-                    if fields_to_update:
-                        response = sdk.update_user(profile, fields_to_update=fields_to_update)
-                        result = {"success": True, "message": f"Updated contact info: {', '.join(fields_to_update)}"}
-                    else:
-                        result = {"error": "No contact information provided to update"}
+                        result = {"error": "No travel profile information provided to update"}
             
             elif tool_name == "update_travel_preferences":
-                login_id = tool_input.get("login_id") or get_current_user_login_id()
+                login_id = tool_input.get("login_id", get_current_user_login_id())
                 if not login_id:
                     result = {"error": "Could not determine user login ID"}
                 else:
-                    profile = UserProfile(login_id=login_id)
+                    profile = TravelProfile(login_id=login_id)
                     fields_to_update = []
                     
                     # Handle air preferences
@@ -702,13 +660,23 @@ def tool_handler(tool_calls):
                         fields_to_update.append("car_preferences")
                     
                     if fields_to_update:
-                        response = sdk.update_user(profile, fields_to_update=fields_to_update)
-                        result = {"success": True, "message": f"Updated travel preferences: {', '.join(fields_to_update)}"}
+                        try:
+                            response = sdk.update_travel_profile(profile, fields_to_update=fields_to_update)
+                            result = {"success": True, "message": f"Updated travel preferences: {', '.join(fields_to_update)}"}
+                        except Exception as update_error:
+                            result = {"error": f"Failed to update travel preferences: {str(update_error)}"}
                     else:
                         result = {"error": "No travel preferences provided to update"}
             
             elif tool_name == "update_loyalty_program":
-                login_id = tool_input.get("login_id") or get_current_user_login_id()
+                from datetime import datetime
+                
+                login_id = tool_input.get("login_id", get_current_user_login_id())
+                
+                # Parse expiration date if provided
+                expiration = None
+                if tool_input.get("expiration_date"):
+                    expiration = datetime.strptime(tool_input["expiration_date"], "%Y-%m-%d").date()
                 
                 # Create loyalty program object
                 program_type = LoyaltyProgramType(tool_input["program_type"])
@@ -719,7 +687,8 @@ def tool_handler(tool_calls):
                     status=tool_input.get("status", ""),
                     status_benefits=tool_input.get("status_benefits", ""),
                     point_total=tool_input.get("point_total", ""),
-                    segment_total=tool_input.get("segment_total", "")
+                    segment_total=tool_input.get("segment_total", ""),
+                    expiration=expiration
                 )
                 
                 response = sdk.update_loyalty_program(loyalty_program, login_id)
@@ -727,38 +696,6 @@ def tool_handler(tool_calls):
                     result = {"success": True, "message": f"Updated {tool_input['vendor_code']} loyalty program"}
                 else:
                     result = {"error": f"Failed to update loyalty program: {response.error}"}
-            
-            elif tool_name == "list_profile_summaries":
-                from datetime import datetime, timedelta
-                
-                days_back = tool_input.get("days_back", 30)
-                page = tool_input.get("page", 1)
-                limit = min(tool_input.get("limit", 50), 200)  # API max is 200
-                active_only = tool_input.get("active_only", True)
-                
-                last_modified_date = datetime.now() - timedelta(days=days_back)
-                
-                summaries = sdk.list_profile_summaries(
-                    last_modified_date=last_modified_date,
-                    page=page,
-                    limit=limit,
-                    active_only=active_only
-                )
-                
-                result = {
-                    "total_items": summaries.metadata.total_items if summaries.metadata else 0,
-                    "total_pages": summaries.metadata.total_pages if summaries.metadata else 0,
-                    "current_page": summaries.metadata.page if summaries.metadata else page,
-                    "items_per_page": summaries.metadata.items_per_page if summaries.metadata else limit,
-                    "profiles": [
-                        {
-                            "login_id": summary.login_id,
-                            "status": summary.status.value,
-                            "xml_profile_sync_id": summary.xml_profile_sync_id,
-                            "profile_last_modified_utc": summary.profile_last_modified_utc.isoformat() if summary.profile_last_modified_utc else None
-                        } for summary in summaries.profile_summaries
-                    ]
-                }
             
             else:
                 result = {"error": f"Unknown tool: {tool_name}"}
@@ -876,8 +813,8 @@ def get_status():
     # Check SDK status
     if sdk:
         try:
-            profile = sdk.get_current_user_profile()
-            status_items.append(f"✅ **Concur SDK**: Connected as {profile.first_name} {profile.last_name}")
+            identity = sdk.get_current_user_identity()
+            status_items.append(f"✅ **Concur SDK**: Connected as {identity.display_name}")
         except:
             status_items.append("❌ **Concur SDK**: Connection error")
     else:
@@ -901,16 +838,16 @@ def clear_conversation():
     return []
 
 def quick_action_profile():
-    """Quick action to get profile"""
-    return "Show me my current profile information"
+    """Quick action to get identity and travel profile"""
+    return "Show me my current identity and travel profile information"
 
 def quick_action_preferences():
     """Quick action to get travel preferences"""
     return "What are my current travel preferences?"
 
 def quick_action_update_job():
-    """Quick action to update job title"""
-    return "Update my job title to "
+    """Quick action to update travel preferences"""
+    return "Update my travel preferences - set my airline seat preference to window"
 
 def create_interface():
     """Create the Gradio interface"""
@@ -966,29 +903,31 @@ def create_interface():
                 # Quick actions
                 gr.Markdown("### ⚡ Quick Actions")
                 with gr.Row():
-                    profile_btn = gr.Button("📋 Get Profile", size="sm")
+                    profile_btn = gr.Button("👤 Get Identity", size="sm")
                     prefs_btn = gr.Button("✈️ Travel Preferences", size="sm")
                 with gr.Row():
-                    update_btn = gr.Button("✏️ Update Job Title", size="sm")
+                    update_btn = gr.Button("✏️ Update Preferences", size="sm")
                     clear_btn = gr.Button("🗑️ Clear Chat", size="sm", variant="secondary")
                 
                 # Help section
                 gr.Markdown("""
                 ### 💡 Example Commands
                 
-                **👤 Profile Management:**
-                • "Show me my profile"
-                • "Update my job title to Senior Engineer"
+                **👤 Identity Management:**
+                • "Show me my identity information"
+                • "What's my current user profile?"
+                • "Create a new user identity"
                 
                 **✈️ Travel Preferences:**
                 • "Set my airline seat preference to window"
                 • "I prefer king size beds in hotels"
                 • "Update my car rental preference to compact"
+                • "What are my current travel preferences?"
                 
-                **📞 Contact Info:**
-                • "Update my work phone number"
-                • "Add my home address"
-                • "Change my business email"
+                **🏢 Travel Profile:**
+                • "Show me my travel profile"
+                • "Update my travel rule class"
+                • "What loyalty programs do I have?"
                 """)
         
         # Event handlers

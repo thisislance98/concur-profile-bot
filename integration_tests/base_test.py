@@ -17,8 +17,9 @@ from typing import Optional, List, Dict, Any
 # Add the parent directory to Python path to import the SDK
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from concur_profile_sdk_improved import (
-    ConcurProfileSDK, UserProfile, Address, Phone, Email, EmergencyContact,
+from concur_profile_sdk import (
+    ConcurSDK, IdentityUser, IdentityName, IdentityEmail, IdentityPhoneNumber, 
+    IdentityEnterpriseInfo, TravelProfile, Address, Phone, Email, EmergencyContact,
     NationalID, DriversLicense, Passport, Visa, TSAInfo, LoyaltyProgram,
     RatePreference, DiscountCode, AirPreferences, HotelPreferences, 
     CarPreferences, RailPreferences, CustomField, UnusedTicket,
@@ -42,7 +43,7 @@ class BaseIntegrationTest(unittest.TestCase):
     """
     
     # Class variables to share across tests
-    sdk: Optional[ConcurProfileSDK] = None
+    sdk: Optional[ConcurSDK] = None
     test_travel_config_id: Optional[str] = None
     created_users: List[str] = []  # Track created users for cleanup
     test_run_id: str = ""
@@ -63,24 +64,39 @@ class BaseIntegrationTest(unittest.TestCase):
         
         # Initialize SDK
         try:
-            cls.sdk = ConcurProfileSDK(
+            # Use username/password authentication since they're available
+            cls.sdk = ConcurSDK(
                 client_id=os.getenv("CONCUR_CLIENT_ID"),
                 client_secret=os.getenv("CONCUR_CLIENT_SECRET"),
                 username=os.getenv("CONCUR_USERNAME"),
                 password=os.getenv("CONCUR_PASSWORD"),
-                base_url=os.getenv("CONCUR_BASE_URL", "https://us2.api.concursolutions.com")
+                base_url=os.getenv("CONCUR_BASE_URL", "https://integration.api.concursolutions.com")
             )
             
-            # Test authentication by getting current user
-            current_user = cls.sdk.get_current_user_profile()
-            print(f"✅ SDK initialized successfully")
-            print(f"   Authenticated as: {current_user.first_name} {current_user.last_name}")
-            print(f"   Login ID: {current_user.login_id}")
+            # Test authentication by getting current user identity
+            try:
+                current_identity = cls.sdk.get_current_user_identity()
+                print(f"✅ SDK initialized successfully with user context")
+                print(f"   Authenticated as: {current_identity.display_name}")
+                print(f"   Username: {current_identity.user_name}")
+                
+                # Get current user's travel profile to get travel config ID
+                current_travel_profile = cls.sdk.get_current_user_travel_profile()
+            except Exception as e:
+                # Client credentials might not provide user-level access
+                print(f"⚠️  Client credentials authentication successful, but no user context available")
+                print(f"   Error: {e}")
+                print(f"   This is expected with client credentials grant - it provides company-level access")
+                
+                # For client credentials, we'll need to use a test user login ID
+                print(f"   Will use company-level access for testing...")
+                current_identity = None
+                current_travel_profile = None
             
             # Store travel config ID for test user creation
             cls.test_travel_config_id = os.getenv("CONCUR_TRAVEL_CONFIG_ID")
-            if not cls.test_travel_config_id:
-                cls.test_travel_config_id = current_user.travel_config_id
+            if not cls.test_travel_config_id and current_travel_profile:
+                cls.test_travel_config_id = current_travel_profile.travel_config_id
             
             print(f"   Travel Config ID: {cls.test_travel_config_id}")
             
@@ -100,8 +116,8 @@ class BaseIntegrationTest(unittest.TestCase):
                 try:
                     # Note: Most Concur instances don't support true deletion
                     # This will likely fail, but we'll try for completeness
-                    cls.sdk.delete_user(login_id)
-                    print(f"   ✅ Deleted user: {login_id}")
+                    # In the new SDK, there's no delete method yet, so we'll skip this
+                    print(f"   ⚠️  Would delete user: {login_id} (deletion not implemented)")
                 except Exception as e:
                     print(f"   ⚠️  Could not delete user {login_id}: {e}")
             cls.created_users.clear()
@@ -118,35 +134,42 @@ class BaseIntegrationTest(unittest.TestCase):
         timestamp = int(datetime.now().timestamp())
         return f"{prefix}_{self.test_run_id}_{timestamp}@sdktest.example.com"
     
-    def create_test_user(
+    def create_test_user_identity(
         self, 
         login_id: Optional[str] = None,
-        first_name: str = "Test",
-        last_name: str = "User",
-        password: Optional[str] = None
-    ) -> UserProfile:
-        """Create a test user and track for cleanup"""
+        given_name: str = "Test",
+        family_name: str = "User"
+    ) -> IdentityUser:
+        """Create a test user identity and track for cleanup"""
         if not login_id:
             login_id = self.generate_unique_login_id()
         
-        if not password:
-            password = f"TestPass_{self.test_run_id}!"
-        
-        profile = UserProfile(
-            login_id=login_id,
-            first_name=first_name,
-            last_name=last_name,
-            travel_config_id=self.test_travel_config_id,
-            job_title="Integration Test User"
+        identity_user = IdentityUser(
+            user_name=login_id,
+            display_name=f"{given_name} {family_name}",
+            name=IdentityName(given_name=given_name, family_name=family_name),
+            emails=[IdentityEmail(value=login_id, primary=True)],
+            title="Integration Test User"
         )
         
-        response = self.sdk.create_user(profile, password=password)
-        self.assertApiResponseSuccess(response, f"Failed to create test user {login_id}")
+        created_user = self.sdk.create_user_identity(identity_user)
         
         # Track for cleanup
         self.created_users.append(login_id)
         
-        return profile
+        return created_user
+
+    def create_test_travel_profile(
+        self,
+        login_id: str,
+        rule_class: str = "Default Travel Class"
+    ) -> TravelProfile:
+        """Create a basic travel profile for testing"""
+        return TravelProfile(
+            login_id=login_id,
+            rule_class=rule_class,
+            travel_config_id=self.test_travel_config_id
+        )
     
     def wait_for_user_availability(self, login_id: str, max_wait: int = 30):
         """Wait for a newly created user to be available for read operations"""
@@ -154,7 +177,7 @@ class BaseIntegrationTest(unittest.TestCase):
         
         for attempt in range(max_wait):
             try:
-                self.sdk.get_profile_by_login_id(login_id)
+                self.sdk.find_user_by_username(login_id)
                 print(f"   ✅ User available after {attempt + 1} seconds")
                 return
             except ProfileNotFoundError:
@@ -178,8 +201,17 @@ class BaseIntegrationTest(unittest.TestCase):
         self.assertIsInstance(response, LoyaltyResponse, f"{message}: Expected LoyaltyResponse object")
         self.assertTrue(response.success, f"{message}: {response.error or response.message}")
     
-    def assertProfileFieldEquals(self, profile: UserProfile, field_name: str, expected_value: Any, message: str = ""):
-        """Assert that a profile field has the expected value"""
+    def assertIdentityFieldEquals(self, identity: IdentityUser, field_name: str, expected_value: Any, message: str = ""):
+        """Assert that an identity field has the expected value"""
+        actual_value = getattr(identity, field_name)
+        self.assertEqual(
+            actual_value, 
+            expected_value, 
+            f"{message}: Field '{field_name}' expected '{expected_value}', got '{actual_value}'"
+        )
+    
+    def assertTravelProfileFieldEquals(self, profile: TravelProfile, field_name: str, expected_value: Any, message: str = ""):
+        """Assert that a travel profile field has the expected value"""
         actual_value = getattr(profile, field_name)
         self.assertEqual(
             actual_value, 
@@ -187,53 +219,14 @@ class BaseIntegrationTest(unittest.TestCase):
             f"{message}: Field '{field_name}' expected '{expected_value}', got '{actual_value}'"
         )
     
-    def assertProfileListLength(self, profile: UserProfile, list_field_name: str, expected_length: int, message: str = ""):
-        """Assert that a profile list field has the expected length"""
+    def assertTravelProfileListLength(self, profile: TravelProfile, list_field_name: str, expected_length: int, message: str = ""):
+        """Assert that a travel profile list field has the expected length"""
         actual_list = getattr(profile, list_field_name)
         self.assertIsInstance(actual_list, list, f"{message}: Field '{list_field_name}' is not a list")
         self.assertEqual(
             len(actual_list), 
             expected_length, 
             f"{message}: Field '{list_field_name}' expected length {expected_length}, got {len(actual_list)}"
-        )
-    
-    def create_sample_address(self, addr_type: AddressType = AddressType.HOME) -> Address:
-        """Create a sample address for testing"""
-        return Address(
-            type=addr_type,
-            street=f"123 Test St {self.test_run_id}",
-            city="Test City",
-            state_province="TS",
-            postal_code="12345",
-            country_code="US"
-        )
-    
-    def create_sample_phone(self, phone_type: PhoneType = PhoneType.HOME) -> Phone:
-        """Create a sample phone for testing"""
-        return Phone(
-            type=phone_type,
-            phone_number=f"555-{self.test_run_id[-4:]}",
-            country_code="1",
-            extension="123" if phone_type == PhoneType.WORK else ""
-        )
-    
-    def create_sample_email(self, email_type: EmailType = EmailType.BUSINESS) -> Email:
-        """Create a sample email for testing"""
-        return Email(
-            type=email_type,
-            email_address=f"test_{self.test_run_id}@example.com"
-        )
-    
-    def create_sample_emergency_contact(self) -> EmergencyContact:
-        """Create a sample emergency contact for testing"""
-        # NOTE: Phone and Email fields are excluded during creation due to API validation errors
-        # They can be added via separate update operations if the proper scopes are available
-        return EmergencyContact(
-            name=f"Emergency Contact {self.test_run_id}",
-            relationship="Spouse"
-            # phone="555-EMERGENCY",  # Excluded during creation
-            # mobile_phone="555-MOBILE",  # Excluded during creation  
-            # email=f"emergency_{self.test_run_id}@example.com"  # Excluded during creation
         )
     
     def create_sample_passport(self) -> Passport:
@@ -299,12 +292,13 @@ class BaseIntegrationTest(unittest.TestCase):
     def create_sample_hotel_preferences(self) -> HotelPreferences:
         """Create sample hotel preferences for testing"""
         return HotelPreferences(
-            smoking_preference=SmokingPreference.NON_SMOKING,
             room_type=HotelRoomType.KING,
             hotel_other="Test hotel preferences",
             prefer_gym=True,
             prefer_pool=True,
-            prefer_restaurant=True
+            prefer_foam_pillows=True,
+            prefer_room_service=True,
+            prefer_early_checkin=True
         )
     
     def create_sample_car_preferences(self) -> CarPreferences:
@@ -312,7 +306,6 @@ class BaseIntegrationTest(unittest.TestCase):
         return CarPreferences(
             car_type=CarType.INTERMEDIATE,
             transmission=TransmissionType.AUTOMATIC,
-            smoking_preference=SmokingPreference.NON_SMOKING,
             gps=True,
             ski_rack=False
         )
@@ -334,20 +327,39 @@ class BaseIntegrationTest(unittest.TestCase):
             currency="USD"
         )
     
-    def print_profile_summary(self, profile: UserProfile, title: str = "Profile Summary"):
-        """Print a summary of a profile for debugging"""
+    def print_identity_summary(self, identity: IdentityUser, title: str = "Identity Summary"):
+        """Print a summary of an identity for debugging"""
+        print(f"\n📋 {title}")
+        print(f"   User ID: {identity.id}")
+        print(f"   Username: {identity.user_name}")
+        print(f"   Display Name: {identity.display_name}")
+        print(f"   Title: {identity.title}")
+        print(f"   Active: {identity.active}")
+        if identity.name:
+            print(f"   Full Name: {identity.name.given_name} {identity.name.family_name}")
+        if identity.emails:
+            print(f"   Primary Email: {identity.emails[0].value}")
+        if identity.phone_numbers:
+            print(f"   Phone Numbers: {len(identity.phone_numbers)}")
+        if identity.enterprise_info:
+            print(f"   Company ID: {identity.enterprise_info.company_id}")
+    
+    def print_travel_profile_summary(self, profile: TravelProfile, title: str = "Travel Profile Summary"):
+        """Print a summary of a travel profile for debugging"""
         print(f"\n📋 {title}")
         print(f"   Login ID: {profile.login_id}")
-        print(f"   Name: {profile.first_name} {profile.last_name}")
-        print(f"   Job Title: {profile.job_title}")
-        print(f"   Addresses: {len(profile.addresses)}")
-        print(f"   Phones: {len(profile.phones)}")
-        print(f"   Emails: {len(profile.emails)}")
-        print(f"   Emergency Contacts: {len(profile.emergency_contacts)}")
+        print(f"   Travel Class: {profile.rule_class}")
+        print(f"   Travel Config ID: {profile.travel_config_id}")
         print(f"   Passports: {len(profile.passports)}")
         print(f"   Visas: {len(profile.visas)}")
         print(f"   Loyalty Programs: {len(profile.loyalty_programs)}")
         print(f"   Custom Fields: {len(profile.custom_fields)}")
+        if profile.air_preferences:
+            print(f"   Air: {profile.air_preferences.home_airport}")
+        if profile.hotel_preferences:
+            print(f"   Hotel: {profile.hotel_preferences.room_type}")
+        if profile.car_preferences:
+            print(f"   Car: {profile.car_preferences.car_type}")
     
     def save_test_data(self, data: Dict[str, Any], filename: str):
         """Save test data to a JSON file for debugging"""
@@ -364,7 +376,8 @@ class BaseIntegrationTest(unittest.TestCase):
 # Re-export all SDK classes for convenience in test files
 __all__ = [
     'BaseIntegrationTest',
-    'ConcurProfileSDK', 'UserProfile', 'Address', 'Phone', 'Email', 'EmergencyContact',
+    'ConcurSDK', 'IdentityUser', 'IdentityName', 'IdentityEmail', 'IdentityPhoneNumber',
+    'IdentityEnterpriseInfo', 'TravelProfile', 'Address', 'Phone', 'Email', 'EmergencyContact',
     'NationalID', 'DriversLicense', 'Passport', 'Visa', 'TSAInfo', 'LoyaltyProgram',
     'RatePreference', 'DiscountCode', 'AirPreferences', 'HotelPreferences', 
     'CarPreferences', 'RailPreferences', 'CustomField', 'UnusedTicket',

@@ -22,7 +22,7 @@ class ConversationTester:
     """Test harness for conversational flows with the bot"""
     
     def __init__(self):
-        self.bot_script = os.path.join(os.path.dirname(os.path.dirname(__file__)), "concur_profile_bot_fixed.py")
+        self.bot_script = os.path.join(os.path.dirname(os.path.dirname(__file__)), "concur_profile_bot.py")
         self.test_results = []
         
     def run_bot_prompt(self, prompt: str, timeout: int = 45) -> Dict[str, Any]:
@@ -433,8 +433,8 @@ class ConversationTester:
 def main():
     """Main test runner"""
     # Check if we have the required environment
-    if not os.path.exists("concur_profile_bot_fixed.py"):
-        print("❌ Error: concur_profile_bot_fixed.py not found")
+    if not os.path.exists("concur_profile_bot.py"):
+        print("❌ Error: concur_profile_bot.py not found")
         print("Please run this test from the project root directory")
         return 1
     

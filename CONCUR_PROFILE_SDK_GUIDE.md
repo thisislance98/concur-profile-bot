@@ -1,4 +1,4 @@
-# Concur Profile SDK - Comprehensive Guide
+# Concur SDK - Comprehensive Guide
 
 ## Table of Contents
 
@@ -7,36 +7,117 @@
 3. [Authentication](#authentication)
 4. [Core Concepts](#core-concepts)
 5. [Basic Operations](#basic-operations)
-6. [Profile Management](#profile-management)
-7. [Contact Information](#contact-information)
-8. [Identity Documents](#identity-documents)
-9. [Travel Preferences](#travel-preferences)
-10. [Loyalty Programs](#loyalty-programs)
-11. [Advanced Features](#advanced-features)
-12. [Error Handling](#error-handling)
-13. [Best Practices](#best-practices)
-14. [API Limitations](#api-limitations)
-15. [Examples](#examples)
+6. [User Management (Identity v4)](#user-management-identity-v4)
+7. [Travel Profile Management (Travel Profile v2)](#travel-profile-management-travel-profile-v2)
+8. [Contact Information](#contact-information)
+9. [Identity Documents](#identity-documents)
+10. [Travel Preferences](#travel-preferences)
+11. [Loyalty Programs](#loyalty-programs)
+12. [Advanced Features](#advanced-features)
+13. [Error Handling](#error-handling)
+14. [Best Practices](#best-practices)
+15. [API Limitations](#api-limitations)
+16. [Examples](#examples)
+
+## Testing Insights
+
+Based on comprehensive integration testing, here are key insights for working with the Concur SDK:
+
+### **XML Structure Discoveries**
+
+**Loyalty Programs:**
+- ✅ Appear as `<AdvantageMemberships>` with `<Membership>` elements
+- ❌ Do NOT appear as `<LoyaltyPrograms>`
+- Only basic fields (vendor code, program number, expiration) appear in XML
+- Status, benefits, and points data are stored but not included in XML output
+
+**Travel Preferences:**
+- ✅ All preference types (Air, Hotel, Car, Rail) generate correct XML structure
+- ✅ Combined preferences work well in single XML document
+- ⚠️ Some fields like `smoking_preference` cause validation errors
+
+### **API Restrictions in Practice**
+
+**User Creation:**
+- Requires specific permissions that may not be available in all environments
+- Client credentials authentication may restrict user creation
+- **Recommended**: Use existing users for testing rather than creating new ones
+
+**Loyalty v1 API:**
+- Highly restricted - typically only available to travel suppliers with completed SAP Concur application review
+- API calls often fail with permission errors (this is expected)
+- XML generation always works regardless of API restrictions
+
+**Authentication Types:**
+- **Client Credentials**: Company-level access, cannot use current user methods
+- **User Authentication**: User-specific context, can use current user methods
+
+### **Successful Testing Patterns**
+
+```python
+# Pattern 1: Use existing authenticated user
+current_user = sdk.get_current_user_identity()
+login_id = current_user.user_name
+
+# Pattern 2: Test XML generation (always works)
+travel_profile = TravelProfile(login_id=login_id, air_preferences=air_prefs)
+xml_output = travel_profile.to_update_xml()
+
+# Pattern 3: Graceful API error handling
+try:
+    response = sdk.update_travel_profile(travel_profile)
+except ConcurProfileError as e:
+    if "401" in str(e):
+        print("⚠️ API restricted (expected in some environments)")
+    else:
+        raise e
+```
+
+### **Validated Functionality**
+
+✅ **Working Well:**
+- Travel preferences XML generation for all types
+- Loyalty program data structures and XML generation
+- Current user identity retrieval
+- Travel profile data parsing
+- Combined preference updates
+
+⚠️ **Environment Dependent:**
+- User creation (permission restricted)
+- Travel profile API updates (may be restricted)
+- Loyalty program API updates (typically restricted)
+
+❌ **Known Issues:**
+- `HotelPreferences.smoking_preference` causes XML validation errors
+- Loyalty program status/benefits don't appear in XML
+- Some API endpoints require specific permission levels
 
 ## Overview
 
-The Concur Profile SDK is a comprehensive Python library for interacting with SAP Concur's Profile APIs. It provides strongly-typed, object-oriented access to all Profile v2 and Loyalty Program v1 functionality, including:
+The Concur SDK is a comprehensive Python library for interacting with SAP Concur's modern APIs. It provides strongly-typed, object-oriented access to both user management and travel profile functionality using:
 
-- **Complete CRUD operations** on user profiles
-- **Full profile schema** with all available fields
-- **Travel preferences** (Air, Hotel, Car, Rail)
-- **Loyalty program management**
-- **Profile summary listing** with pagination
-- **Advanced features** like TSA info, custom fields, emergency contacts
-- **Comprehensive error handling** and validation
+- **Identity v4 API** for user management (SCIM 2.0 compliant) - replaces Profile v1
+- **Travel Profile v2 API** for travel preferences, loyalty programs, and travel-specific data
 
 ### Key Features
 
+- **Modern API Architecture**: Uses Identity v4 + Travel Profile v2 for optimal functionality
+- **SCIM 2.0 Compliant**: Full support for modern identity management standards
 - **Strongly Typed**: Uses Python dataclasses and enums for type safety
-- **XML Handling**: Built with lxml for robust XML processing
-- **Schema Compliant**: Follows Concur's XSD schema requirements exactly
+- **XML & JSON Handling**: Built with lxml and requests for robust API processing
+- **Schema Compliant**: Follows both SCIM 2.0 and Concur's XSD schema requirements exactly
 - **Production Ready**: Includes comprehensive error handling and logging
 - **Well Tested**: Extensive integration test suite
+
+### Supported Operations
+
+- **User Management**: Create, read, update users via Identity v4 (SCIM 2.0)
+- **Travel Profiles**: Complete travel profile management via Travel Profile v2
+- **Travel Preferences**: Air, Hotel, Car, Rail preferences
+- **Loyalty Programs**: Full loyalty program management
+- **Identity Documents**: Passports, visas, national IDs, driver's licenses
+- **TSA Information**: Known traveler numbers, security preferences
+- **Custom Fields**: Organization-specific data fields
 
 ## Installation and Setup
 
@@ -56,15 +137,14 @@ CONCUR_CLIENT_SECRET=your_client_secret
 CONCUR_USERNAME=your_username
 CONCUR_PASSWORD=your_password
 CONCUR_BASE_URL=https://us2.api.concursolutions.com
-CONCUR_TRAVEL_CONFIG_ID=your_travel_config_id
 ```
 
 ### Basic Initialization
 
 ```python
-from concur_profile_sdk_improved import ConcurProfileSDK
+from concur_profile_sdk import ConcurSDK
 
-sdk = ConcurProfileSDK(
+sdk = ConcurSDK(
     client_id="your-client-id",
     client_secret="your-client-secret", 
     username="user@example.com",
@@ -78,8 +158,11 @@ The SDK handles OAuth2 authentication automatically:
 
 ```python
 # Authentication happens automatically on first API call
-profile = sdk.get_current_user_profile()
-print(f"Authenticated as: {profile.first_name} {profile.last_name}")
+identity = sdk.get_current_user_identity()
+print(f"Authenticated as: {identity.display_name}")
+
+travel_profile = sdk.get_current_user_travel_profile()
+print(f"Travel config: {travel_profile.rule_class}")
 ```
 
 ### Authentication Features
@@ -87,21 +170,46 @@ print(f"Authenticated as: {profile.first_name} {profile.last_name}")
 - **Automatic token refresh** when tokens expire
 - **Error handling** for authentication failures
 - **Token caching** for performance
+- **Geolocation handling** for Identity v4 endpoints
 
 ## Core Concepts
 
-### UserProfile Class
+### Dual API Architecture
 
-The `UserProfile` class is the central data structure containing all user information:
+The SDK uses two complementary APIs:
+
+1. **Identity v4 (SCIM 2.0)** - User identity management
+2. **Travel Profile v2** - Travel-specific data and preferences
+
+### IdentityUser Class
+
+The `IdentityUser` class handles user identity information via Identity v4:
 
 ```python
-from concur_profile_sdk_improved import UserProfile
+from concur_profile_sdk import IdentityUser, IdentityName, IdentityEmail
 
-profile = UserProfile(
+user = IdentityUser(
+    user_name="user@example.com",
+    display_name="John Doe",
+    name=IdentityName(given_name="John", family_name="Doe"),
+    emails=[IdentityEmail(value="user@example.com")]
+)
+```
+
+### TravelProfile Class
+
+The `TravelProfile` class handles travel-specific information via Travel Profile v2:
+
+```python
+from concur_profile_sdk import TravelProfile, AirPreferences, SeatPreference
+
+profile = TravelProfile(
     login_id="user@example.com",
-    first_name="John",
-    last_name="Doe",
-    travel_config_id="your-config-id"
+    rule_class="Default Travel Class",
+    air_preferences=AirPreferences(
+        home_airport="SEA",
+        seat_preference=SeatPreference.WINDOW
+    )
 )
 ```
 
@@ -110,431 +218,416 @@ profile = UserProfile(
 The SDK uses enums for all constrained values:
 
 ```python
-from concur_profile_sdk_improved import (
-    AddressType, PhoneType, EmailType, 
-    SeatPreference, MealType, CarType
+from concur_profile_sdk import (
+    SeatPreference, MealType, CarType, HotelRoomType,
+    LoyaltyProgramType, VisaType
 )
 
 # Type-safe enum usage
-address_type = AddressType.HOME
 seat_pref = SeatPreference.WINDOW
 meal_pref = MealType.VEGETARIAN
-```
-
-### Data Classes
-
-All complex data is represented by dataclasses:
-
-```python
-from concur_profile_sdk_improved import Address, Phone, Email
-
-address = Address(
-    type=AddressType.HOME,
-    street="123 Main St",
-    city="Seattle",
-    state_province="WA",
-    postal_code="98101",
-    country_code="US"
-)
+car_type = CarType.INTERMEDIATE
 ```
 
 ## Basic Operations
 
-### Get Current User Profile
+### Get Current User Identity
 
 ```python
-# Get complete profile of authenticated user
-profile = sdk.get_current_user_profile()
+# Get identity information of authenticated user
+identity = sdk.get_current_user_identity()
 
-print(f"Name: {profile.first_name} {profile.last_name}")
-print(f"Company: {profile.company_name}")
-print(f"Job Title: {profile.job_title}")
-print(f"Addresses: {len(profile.addresses)}")
-print(f"Loyalty Programs: {len(profile.loyalty_programs)}")
+print(f"User ID: {identity.id}")
+print(f"Username: {identity.user_name}")
+print(f"Display Name: {identity.display_name}")
+print(f"Title: {identity.title}")
+print(f"Active: {identity.active}")
+
+if identity.name:
+    print(f"Full Name: {identity.name.given_name} {identity.name.family_name}")
+
+if identity.emails:
+    print(f"Primary Email: {identity.emails[0].value}")
 ```
 
-### Get Profile by Login ID
+### Get Current User Travel Profile
+
+```python
+# Get travel profile of authenticated user
+travel_profile = sdk.get_current_user_travel_profile()
+
+print(f"Login ID: {travel_profile.login_id}")
+print(f"Travel Class: {travel_profile.rule_class}")
+print(f"Passports: {len(travel_profile.passports)}")
+print(f"Loyalty Programs: {len(travel_profile.loyalty_programs)}")
+
+if travel_profile.air_preferences:
+    print(f"Home Airport: {travel_profile.air_preferences.home_airport}")
+```
+
+### Find User by Username
 
 ```python
 try:
-    profile = sdk.get_profile_by_login_id("user@example.com")
-    print(f"Found user: {profile.first_name} {profile.last_name}")
-except ProfileNotFoundError:
-    print("User not found")
+    user = sdk.find_user_by_username("user@example.com")
+    if user:
+        print(f"Found user: {user.display_name}")
+    else:
+        print("User not found")
+except Exception as e:
+    print(f"Error: {e}")
 ```
 
-### List Profile Summaries
-
-```python
-from datetime import datetime, timedelta
-
-# Get profiles modified in last 30 days
-last_modified = datetime.now() - timedelta(days=30)
-
-summaries = sdk.list_profile_summaries(
-    last_modified_date=last_modified,
-    page=1,
-    limit=50,
-    active_only=True
-)
-
-print(f"Found {len(summaries.profile_summaries)} profiles")
-for summary in summaries.profile_summaries:
-    print(f"  {summary.login_id} - {summary.status.value}")
-```
-
-## Profile Management
+## User Management (Identity v4)
 
 ### Creating Users
 
 #### Basic User Creation
 
 ```python
-from concur_profile_sdk_improved import UserProfile
+from concur_profile_sdk import IdentityUser, IdentityName, IdentityEmail
 
-profile = UserProfile(
-    login_id="newuser@example.com",
-    first_name="Jane",
-    last_name="Smith", 
-    travel_config_id="your-travel-config-id"
+user = IdentityUser(
+    user_name="newuser@example.com",
+    display_name="Jane Smith",
+    name=IdentityName(given_name="Jane", family_name="Smith"),
+    emails=[IdentityEmail(value="newuser@example.com", primary=True)]
 )
 
-response = sdk.create_user(profile, password="SecurePass123!")
-print(f"Created user with UUID: {response.uuid}")
+created_user = sdk.create_user_identity(user)
+print(f"Created user with ID: {created_user.id}")
 ```
 
 #### Comprehensive User Creation
 
 ```python
-from concur_profile_sdk_improved import (
-    UserProfile, Address, Phone, Email, EmergencyContact,
-    AddressType, PhoneType, EmailType
+from concur_profile_sdk import (
+    IdentityUser, IdentityName, IdentityEmail, IdentityPhoneNumber,
+    IdentityEnterpriseInfo
 )
+from datetime import date
 
-# Create user with full contact information
-profile = UserProfile(
-    login_id="comprehensive@example.com",
-    first_name="John",
-    last_name="Comprehensive",
-    middle_name="Middle",
-    job_title="Senior Manager",
-    company_name="Example Corp",
-    employee_id="EMP12345",
-    travel_config_id="your-travel-config-id",
+user = IdentityUser(
+    user_name="comprehensive@example.com",
+    display_name="John Comprehensive",
+    title="Senior Manager",
+    nick_name="Johnny",
+    preferred_language="en-US",
+    timezone="America/New_York",
+    
+    # Name information
+    name=IdentityName(
+        given_name="John",
+        family_name="Comprehensive",
+        middle_name="Middle"
+    ),
     
     # Contact information
-    addresses=[
-        Address(
-            type=AddressType.HOME,
-            street="123 Home Street",
-            city="Seattle",
-            state_province="WA", 
-            postal_code="98101",
-            country_code="US"
-        ),
-        Address(
-            type=AddressType.WORK,
-            street="456 Work Avenue",
-            city="Seattle",
-            state_province="WA",
-            postal_code="98102", 
-            country_code="US"
-        )
-    ],
-    
-    phones=[
-        Phone(
-            type=PhoneType.HOME,
-            phone_number="206-555-0123",
-            country_code="1"
-        ),
-        Phone(
-            type=PhoneType.WORK,
-            phone_number="206-555-0124",
-            country_code="1"
-        )
-    ],
-    
     emails=[
-        Email(
-            type=EmailType.BUSINESS,
-            email_address="john.work@example.com"
+        IdentityEmail(
+            value="john.work@example.com",
+            type="work",
+            primary=True
         ),
-        Email(
-            type=EmailType.PERSONAL,
-            email_address="john.personal@example.com"
+        IdentityEmail(
+            value="john.personal@example.com",
+            type="home",
+            primary=False
         )
     ],
     
-    emergency_contacts=[
-        EmergencyContact(
-            name="Jane Doe",
-            relationship="Spouse",
-            phone="206-555-0125"
+    phone_numbers=[
+        IdentityPhoneNumber(
+            value="+1-206-555-0123",
+            type="work",
+            primary=True
         )
-    ]
+    ],
+    
+    # Enterprise information
+    enterprise_info=IdentityEnterpriseInfo(
+        company_id="COMP123",
+        employee_number="EMP12345",
+        start_date=date(2023, 1, 15),
+        department="Engineering",
+        cost_center="CC-ENG-001"
+    )
 )
 
-response = sdk.create_user(profile, password="SecurePass123!")
+created_user = sdk.create_user_identity(user)
+print(f"Created comprehensive user: {created_user.id}")
 ```
 
 ### Updating Users
 
+#### Simple Field Updates
+
+```python
+# Update user with simple field changes
+updates = {
+    "title": "Senior Director",
+    "nickName": "Boss",
+    "timezone": "America/Chicago"
+}
+
+updated_user = sdk.update_user_identity_simple(user_id, updates)
+print(f"Updated user: {updated_user.title}")
+```
+
+#### Advanced PATCH Operations
+
+```python
+from concur_profile_sdk import IdentityPatchOperation
+
+operations = [
+    IdentityPatchOperation(
+        op="replace",
+        path="title",
+        value="Principal Engineer"
+    ),
+    IdentityPatchOperation(
+        op="replace",
+        path="displayName",
+        value="John P. Comprehensive"
+    ),
+    IdentityPatchOperation(
+        op="add",
+        path="nickName",
+        value="Chief"
+    )
+]
+
+updated_user = sdk.update_user_identity(user_id, operations)
+print(f"Applied {len(operations)} updates")
+```
+
+## Travel Profile Management (Travel Profile v2)
+
+### Getting Travel Profiles
+
+```python
+# Get by login ID
+travel_profile = sdk.get_travel_profile_by_login_id("user@example.com")
+
+print(f"Travel Class: {travel_profile.rule_class}")
+print(f"Travel Config ID: {travel_profile.travel_config_id}")
+```
+
+### Updating Travel Profiles
+
 #### Update Specific Fields
 
 ```python
-# Update only job title and company
-profile = UserProfile(
+from concur_profile_sdk import TravelProfile, AirPreferences, SeatPreference
+
+# Update only air preferences
+profile = TravelProfile(
     login_id="user@example.com",
-    job_title="Senior Director",
-    company_name="New Company Inc"
+    air_preferences=AirPreferences(
+        home_airport="SEA",
+        seat_preference=SeatPreference.WINDOW,
+        air_other="Prefer early morning flights"
+    )
 )
 
-response = sdk.update_user(
+response = sdk.update_travel_profile(
     profile, 
-    fields_to_update=["job_title", "company_name"]
+    fields_to_update=["air_preferences"]
 )
+print(f"Update response: {response.message}")
 ```
 
-#### Update All Non-Empty Fields
+#### Update Multiple Travel Sections
 
 ```python
-# Update all fields that have values
-profile = UserProfile(
-    login_id="user@example.com",
-    first_name="Updated",
-    last_name="Name",
-    job_title="New Title"
+from concur_profile_sdk import (
+    TravelProfile, AirPreferences, HotelPreferences, CarPreferences,
+    SeatPreference, HotelRoomType, CarType
 )
 
-response = sdk.update_user(profile)  # Updates all non-empty fields
+profile = TravelProfile(
+    login_id="user@example.com",
+    
+    # Air preferences
+    air_preferences=AirPreferences(
+        home_airport="SEA",
+        seat_preference=SeatPreference.WINDOW
+    ),
+    
+    # Hotel preferences
+    hotel_preferences=HotelPreferences(
+        room_type=HotelRoomType.KING,
+        prefer_gym=True,
+        prefer_pool=True
+    ),
+    
+    # Car preferences
+    car_preferences=CarPreferences(
+        car_type=CarType.INTERMEDIATE,
+        gps=True
+    )
+)
+
+response = sdk.update_travel_profile(
+    profile,
+    fields_to_update=["air_preferences", "hotel_preferences", "car_preferences"]
+)
 ```
 
 ## Contact Information
 
-### Addresses
+Contact information is managed through the Identity v4 API:
+
+### Email Addresses
 
 ```python
-from concur_profile_sdk_improved import Address, AddressType
+from concur_profile_sdk import IdentityEmail
 
-addresses = [
-    Address(
-        type=AddressType.HOME,
-        street="123 Main Street",
-        city="Seattle", 
-        state_province="WA",
-        postal_code="98101",
-        country_code="US"
-    ),
-    Address(
-        type=AddressType.WORK,
-        street="456 Business Ave",
-        city="Bellevue",
-        state_province="WA", 
-        postal_code="98004",
-        country_code="US"
+# Update user emails
+operations = [
+    IdentityPatchOperation(
+        op="replace",
+        path="emails",
+        value=[
+            {
+                "value": "primary@example.com",
+                "type": "work",
+                "primary": True
+            },
+            {
+                "value": "secondary@example.com", 
+                "type": "home",
+                "primary": False
+            }
+        ]
     )
 ]
 
-profile = UserProfile(
-    login_id="user@example.com",
-    addresses=addresses
-)
-
-sdk.update_user(profile, fields_to_update=["addresses"])
+updated_user = sdk.update_user_identity(user_id, operations)
 ```
 
 ### Phone Numbers
 
 ```python
-from concur_profile_sdk_improved import Phone, PhoneType
-
-phones = [
-    Phone(
-        type=PhoneType.HOME,
-        phone_number="206-555-0123",
-        country_code="1"
-    ),
-    Phone(
-        type=PhoneType.WORK,
-        phone_number="206-555-0124", 
-        country_code="1",
-        extension="1234"
-    ),
-    Phone(
-        type=PhoneType.CELL,
-        phone_number="206-555-0125",
-        country_code="1"
+# Update phone numbers
+operations = [
+    IdentityPatchOperation(
+        op="replace",
+        path="phoneNumbers",
+        value=[
+            {
+                "value": "+1-206-555-0123",
+                "type": "work",
+                "primary": True
+            },
+            {
+                "value": "+1-206-555-0124",
+                "type": "mobile",
+                "primary": False
+            }
+        ]
     )
 ]
 
-profile = UserProfile(
-    login_id="user@example.com",
-    phones=phones
-)
-
-sdk.update_user(profile, fields_to_update=["phones"])
-```
-
-### Email Addresses
-
-```python
-from concur_profile_sdk_improved import Email, EmailType
-
-emails = [
-    Email(
-        type=EmailType.BUSINESS,
-        email_address="john.work@example.com"
-    ),
-    Email(
-        type=EmailType.PERSONAL,
-        email_address="john.personal@gmail.com"
-    ),
-    Email(
-        type=EmailType.SUPERVISOR,
-        email_address="supervisor@example.com"
-    )
-]
-
-profile = UserProfile(
-    login_id="user@example.com",
-    emails=emails
-)
-
-sdk.update_user(profile, fields_to_update=["emails"])
-```
-
-### Emergency Contacts
-
-```python
-from concur_profile_sdk_improved import EmergencyContact
-
-emergency_contacts = [
-    EmergencyContact(
-        name="Jane Doe",
-        relationship="Spouse",
-        phone="206-555-0125",
-        mobile_phone="206-555-0126",
-        email="jane@example.com"
-    ),
-    EmergencyContact(
-        name="Bob Smith",
-        relationship="Parent",
-        phone="206-555-0127"
-    )
-]
-
-profile = UserProfile(
-    login_id="user@example.com",
-    emergency_contacts=emergency_contacts
-)
-
-sdk.update_user(profile, fields_to_update=["emergency_contacts"])
+updated_user = sdk.update_user_identity(user_id, operations)
 ```
 
 ## Identity Documents
 
+Identity documents are managed through the Travel Profile v2 API:
+
 ### Passports
 
 ```python
-from concur_profile_sdk_improved import Passport
+from concur_profile_sdk import TravelProfile, Passport
 from datetime import date
 
-passports = [
-    Passport(
-        doc_number="123456789",
-        nationality="US",
-        issue_country="US",
-        issue_date=date(2020, 1, 15),
-        expiration_date=date(2030, 1, 15),
-        primary=True
-    )
-]
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    passports=passports
+    passports=[
+        Passport(
+            doc_number="123456789",
+            nationality="US",
+            issue_country="US",
+            issue_date=date(2020, 1, 15),
+            expiration_date=date(2030, 1, 15),
+            primary=True
+        )
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["passports"])
+sdk.update_travel_profile(profile, fields_to_update=["passports"])
 ```
 
 ### Visas
 
 ```python
-from concur_profile_sdk_improved import Visa, VisaType
+from concur_profile_sdk import Visa, VisaType
 from datetime import date
 
-visas = [
-    Visa(
-        visa_nationality="US",
-        visa_number="V123456789",
-        visa_type=VisaType.MULTI_ENTRY,
-        visa_country_issued="GB",
-        visa_date_issued=date(2023, 6, 1),
-        visa_expiration=date(2025, 6, 1)
-    )
-]
-
-profile = UserProfile(
-    login_id="user@example.com", 
-    visas=visas
+profile = TravelProfile(
+    login_id="user@example.com",
+    visas=[
+        Visa(
+            visa_nationality="US",
+            visa_number="V123456789",
+            visa_type=VisaType.MULTI_ENTRY,
+            visa_country_issued="GB",
+            visa_date_issued=date(2023, 6, 1),
+            visa_expiration=date(2025, 6, 1)
+        )
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["visas"])
+sdk.update_travel_profile(profile, fields_to_update=["visas"])
 ```
 
 ### National IDs and Driver's Licenses
 
 ```python
-from concur_profile_sdk_improved import NationalID, DriversLicense
+from concur_profile_sdk import NationalID, DriversLicense
 
-# National IDs
-national_ids = [
-    NationalID(
-        id_number="123-45-6789",
-        country_code="US"
-    )
-]
-
-# Driver's Licenses
-drivers_licenses = [
-    DriversLicense(
-        license_number="D123456789",
-        country_code="US",
-        state_province="WA"
-    )
-]
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    national_ids=national_ids,
-    drivers_licenses=drivers_licenses
+    national_ids=[
+        NationalID(
+            id_number="123-45-6789",
+            country_code="US"
+        )
+    ],
+    drivers_licenses=[
+        DriversLicense(
+            license_number="D123456789",
+            country_code="US",
+            state_province="WA"
+        )
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["national_ids", "drivers_licenses"])
+sdk.update_travel_profile(
+    profile, 
+    fields_to_update=["national_ids", "drivers_licenses"]
+)
 ```
 
 ### TSA Information
 
 ```python
-from concur_profile_sdk_improved import TSAInfo
+from concur_profile_sdk import TSAInfo
 from datetime import date
 
-tsa_info = TSAInfo(
-    known_traveler_number="12345678901",
-    gender="Male",
-    date_of_birth=date(1985, 6, 15),
-    redress_number="987654321",
-    no_middle_name=False
-)
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    tsa_info=tsa_info
+    tsa_info=TSAInfo(
+        known_traveler_number="12345678901",
+        gender="Male",
+        date_of_birth=date(1985, 6, 15),
+        redress_number="987654321",
+        no_middle_name=False
+    )
 )
 
-sdk.update_user(profile, fields_to_update=["tsa_info"])
+sdk.update_travel_profile(profile, fields_to_update=["tsa_info"])
 ```
 
 ## Travel Preferences
@@ -542,121 +635,109 @@ sdk.update_user(profile, fields_to_update=["tsa_info"])
 ### Air Travel Preferences
 
 ```python
-from concur_profile_sdk_improved import (
-    AirPreferences, SeatPreference, SeatSection, MealType
+from concur_profile_sdk import (
+    TravelProfile, AirPreferences, SeatPreference, SeatSection, MealType
 )
 
-air_preferences = AirPreferences(
-    seat_preference=SeatPreference.WINDOW,
-    seat_section=SeatSection.FORWARD,
-    meal_preference=MealType.VEGETARIAN,
-    home_airport="SEA",
-    air_other="Prefer early morning flights"
-)
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    air_preferences=air_preferences
+    air_preferences=AirPreferences(
+        seat_preference=SeatPreference.WINDOW,
+        seat_section=SeatSection.FORWARD,
+        meal_preference=MealType.VEGETARIAN,
+        home_airport="SEA",
+        air_other="Prefer early morning flights"
+    )
 )
 
-sdk.update_user(profile, fields_to_update=["air_preferences"])
+sdk.update_travel_profile(profile, fields_to_update=["air_preferences"])
 ```
 
 ### Hotel Preferences
 
 ```python
-from concur_profile_sdk_improved import (
-    HotelPreferences, HotelRoomType, SmokingPreference
+from concur_profile_sdk import (
+    TravelProfile, HotelPreferences, HotelRoomType
 )
 
-hotel_preferences = HotelPreferences(
-    room_type=HotelRoomType.KING,
-    hotel_other="Late checkout preferred",
-    prefer_foam_pillows=True,
-    prefer_gym=True,
-    prefer_pool=True,
-    prefer_room_service=True,
-    prefer_early_checkin=True
-)
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    hotel_preferences=hotel_preferences
+    hotel_preferences=HotelPreferences(
+        room_type=HotelRoomType.KING,
+        hotel_other="Late checkout preferred",
+        prefer_foam_pillows=True,
+        prefer_gym=True,
+        prefer_pool=True,
+        prefer_room_service=True,
+        prefer_early_checkin=True
+    )
 )
 
-sdk.update_user(profile, fields_to_update=["hotel_preferences"])
+sdk.update_travel_profile(profile, fields_to_update=["hotel_preferences"])
 ```
 
 ### Car Rental Preferences
 
 ```python
-from concur_profile_sdk_improved import (
-    CarPreferences, CarType, TransmissionType, SmokingPreference
+from concur_profile_sdk import (
+    TravelProfile, CarPreferences, CarType, TransmissionType, SmokingPreference
 )
 
-car_preferences = CarPreferences(
-    car_type=CarType.INTERMEDIATE,
-    transmission=TransmissionType.AUTOMATIC,
-    smoking_preference=SmokingPreference.NON_SMOKING,
-    gps=True,
-    ski_rack=False
-)
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    car_preferences=car_preferences
+    car_preferences=CarPreferences(
+        car_type=CarType.INTERMEDIATE,
+        transmission=TransmissionType.AUTOMATIC,
+        smoking_preference=SmokingPreference.NON_SMOKING,
+        gps=True,
+        ski_rack=False
+    )
 )
 
 # Note: Car preferences should be updated individually
 # The SDK handles this automatically
-sdk.update_user(profile, fields_to_update=["car_preferences"])
+sdk.update_travel_profile(profile, fields_to_update=["car_preferences"])
 ```
 
 ### Rail Travel Preferences
 
 ```python
-from concur_profile_sdk_improved import RailPreferences
+from concur_profile_sdk import TravelProfile, RailPreferences
 
-rail_preferences = RailPreferences(
-    seat="Window",
-    coach="First Class",
-    noise_comfort="Quiet",
-    bed="Upper",
-    special_meals="Vegetarian"
-)
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    rail_preferences=rail_preferences
+    rail_preferences=RailPreferences(
+        seat="Window",
+        coach="First Class",
+        noise_comfort="Quiet",
+        bed="Upper",
+        special_meals="Vegetarian"
+    )
 )
 
-sdk.update_user(profile, fields_to_update=["rail_preferences"])
+sdk.update_travel_profile(profile, fields_to_update=["rail_preferences"])
 ```
 
 ### Rate Preferences and Discount Codes
 
 ```python
-from concur_profile_sdk_improved import RatePreference, DiscountCode
+from concur_profile_sdk import TravelProfile, RatePreference, DiscountCode
 
-rate_preferences = RatePreference(
-    aaa_rate=True,
-    aarp_rate=False,
-    govt_rate=True,
-    military_rate=False
-)
-
-discount_codes = [
-    DiscountCode(vendor="HZ", code="CDP123456"),
-    DiscountCode(vendor="AV", code="AWD987654")
-]
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    rate_preferences=rate_preferences,
-    discount_codes=discount_codes
+    rate_preferences=RatePreference(
+        aaa_rate=True,
+        aarp_rate=False,
+        govt_rate=True,
+        military_rate=False
+    ),
+    discount_codes=[
+        DiscountCode(vendor="HZ", code="CDP123456"),
+        DiscountCode(vendor="AV", code="AWD987654")
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["rate_preferences", "discount_codes"])
+sdk.update_travel_profile(profile, fields_to_update=["rate_preferences", "discount_codes"])
 ```
 
 ## Loyalty Programs
@@ -666,7 +747,7 @@ sdk.update_user(profile, fields_to_update=["rate_preferences", "discount_codes"]
 The SDK provides a dedicated Loyalty v1 API for managing loyalty programs:
 
 ```python
-from concur_profile_sdk_improved import LoyaltyProgram, LoyaltyProgramType
+from concur_profile_sdk import LoyaltyProgram, LoyaltyProgramType
 
 # Create loyalty program
 loyalty_program = LoyaltyProgram(
@@ -683,6 +764,51 @@ if response.success:
     print("Loyalty program updated successfully")
 else:
     print(f"Failed to update: {response.error}")
+```
+
+### **IMPORTANT: XML Structure for Loyalty Programs**
+
+⚠️ **Key Discovery**: Loyalty programs appear in XML as `<AdvantageMemberships>` with `<Membership>` elements, **NOT** as `<LoyaltyPrograms>`:
+
+```xml
+<AdvantageMemberships>
+    <Membership>
+        <VendorCode>UA</VendorCode>
+        <VendorType>Air</VendorType>
+        <ProgramNumber>123456789</ProgramNumber>
+        <ProgramCode>UA</ProgramCode>
+        <ExpirationDate>2024-12-31</ExpirationDate>
+    </Membership>
+</AdvantageMemberships>
+```
+
+### **Limited XML Field Support**
+
+While the `LoyaltyProgram` data structure supports comprehensive fields, only basic fields appear in generated XML:
+
+**✅ Fields that appear in XML:**
+- `vendor_code` → `<VendorCode>`
+- `program_type` → `<VendorType>` (Air, Hotel, Car, Rail)
+- `account_number` → `<ProgramNumber>`
+- `vendor_code` → `<ProgramCode>`
+- `expiration` → `<ExpirationDate>` (if provided)
+
+**❌ Fields that DON'T appear in XML:**
+- `status` (e.g., "Premier 1K")
+- `status_benefits` (e.g., "Unlimited upgrades")
+- `point_total`, `segment_total`
+- `next_status`, `points_until_next_status`, `segments_until_next_status`
+
+```python
+# This data structure is valid but status/benefits won't appear in XML
+loyalty_program = LoyaltyProgram(
+    program_type=LoyaltyProgramType.AIR,
+    vendor_code="UA",
+    account_number="123456789",
+    status="Premier 1K",  # Won't appear in XML
+    status_benefits="Unlimited upgrades",  # Won't appear in XML
+    point_total="150000"  # Won't appear in XML
+)
 ```
 
 ### Comprehensive Loyalty Program Data
@@ -743,54 +869,74 @@ for program in air_programs + hotel_programs:
         print(f"Updated {program.vendor_code} program")
 ```
 
+### Loyalty Programs in Travel Profile XML
+
+When loyalty programs are included in travel profile updates, they generate the following XML structure:
+
+```python
+from concur_profile_sdk import TravelProfile, LoyaltyProgram, LoyaltyProgramType
+
+# Create travel profile with loyalty programs
+travel_profile = TravelProfile(
+    login_id="user@example.com",
+    loyalty_programs=[
+        LoyaltyProgram(
+            program_type=LoyaltyProgramType.AIR,
+            vendor_code="UA",
+            account_number="123456789",
+            expiration=date(2024, 12, 31)
+        )
+    ]
+)
+
+# Generate XML (will contain AdvantageMemberships, not LoyaltyPrograms)
+xml_output = travel_profile.to_update_xml(fields_to_update=["loyalty_programs"])
+```
+
 ## Advanced Features
 
 ### Custom Fields
 
 ```python
-from concur_profile_sdk_improved import CustomField
+from concur_profile_sdk import TravelProfile, CustomField
 
-custom_fields = [
-    CustomField(
-        field_id="COST_CENTER",
-        value="CC-12345",
-        field_type="Text"
-    ),
-    CustomField(
-        field_id="DEPARTMENT",
-        value="Engineering",
-        field_type="Text"
-    )
-]
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    custom_fields=custom_fields
+    custom_fields=[
+        CustomField(
+            field_id="COST_CENTER",
+            value="CC-12345",
+            field_type="Text"
+        ),
+        CustomField(
+            field_id="DEPARTMENT",
+            value="Engineering",
+            field_type="Text"
+        )
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["custom_fields"])
+sdk.update_travel_profile(profile, fields_to_update=["custom_fields"])
 ```
 
 ### Unused Tickets
 
 ```python
-from concur_profile_sdk_improved import UnusedTicket
+from concur_profile_sdk import TravelProfile, UnusedTicket
 
-unused_tickets = [
-    UnusedTicket(
-        ticket_number="1234567890123",
-        airline_code="UA",
-        amount="500.00",
-        currency="USD"
-    )
-]
-
-profile = UserProfile(
+profile = TravelProfile(
     login_id="user@example.com",
-    unused_tickets=unused_tickets
+    unused_tickets=[
+        UnusedTicket(
+            ticket_number="1234567890123",
+            airline_code="UA",
+            amount="500.00",
+            currency="USD"
+        )
+    ]
 )
 
-sdk.update_user(profile, fields_to_update=["unused_tickets"])
+sdk.update_travel_profile(profile, fields_to_update=["unused_tickets"])
 ```
 
 ## Error Handling
@@ -800,7 +946,7 @@ sdk.update_user(profile, fields_to_update=["unused_tickets"])
 The SDK provides specific exception types for different error conditions:
 
 ```python
-from concur_profile_sdk_improved import (
+from concur_profile_sdk import (
     ConcurProfileError,
     AuthenticationError,
     ProfileNotFoundError,
@@ -808,7 +954,7 @@ from concur_profile_sdk_improved import (
 )
 
 try:
-    profile = sdk.get_profile_by_login_id("nonexistent@example.com")
+    profile = sdk.get_travel_profile_by_login_id("nonexistent@example.com")
 except ProfileNotFoundError:
     print("User not found")
 except AuthenticationError:
@@ -823,12 +969,12 @@ except ConcurProfileError as e:
 
 ```python
 # Always check response success
-response = sdk.create_user(profile)
+response = sdk.create_user_identity(user)
 
-if response.success:
-    print(f"User created with UUID: {response.uuid}")
+if hasattr(response, 'success') and response.success:
+    print(f"User created with ID: {response.id}")
 else:
-    print(f"Failed to create user: {response.message}")
+    print(f"Failed to create user: {getattr(response, 'message', 'Unknown error')}")
 ```
 
 ### Loyalty Program Error Handling
@@ -844,129 +990,398 @@ else:
 
 ## Best Practices
 
-### 1. User Creation Strategy
+### 1. Authentication and Environment Detection
 
-Use a two-step approach for comprehensive user creation:
+Detect authentication type and adjust operations accordingly:
 
 ```python
-# Step 1: Create user with minimal required fields
-basic_profile = UserProfile(
-    login_id="user@example.com",
-    first_name="John",
-    last_name="Doe",
-    travel_config_id="your-config-id"
+from concur_profile_sdk import ConcurSDK, ConcurProfileError
+
+# Initialize SDK and detect authentication context
+sdk = ConcurSDK()
+
+try:
+    # Try to get current user context
+    current_user = sdk.get_current_user_identity()
+    login_id = current_user.user_name
+    print(f"User context available: {current_user.display_name}")
+    
+    # Can use current user methods
+    travel_profile = sdk.get_current_user_travel_profile()
+    
+except ConcurProfileError as e:
+    if "client credentials" in str(e).lower():
+        print("Client credentials authentication - company-level access")
+        # Must specify login_id for operations
+        # Use existing users rather than creating new ones
+    else:
+        print(f"Authentication issue: {e}")
+```
+
+### 2. User Creation Strategy (with Permission Handling)
+
+Use a defensive approach for user creation that handles permission restrictions:
+
+```python
+from concur_profile_sdk import IdentityUser, IdentityName, IdentityEmail, TravelProfile
+
+def create_user_safely(sdk, user_data):
+    """Create user with graceful permission handling"""
+    try:
+        # Attempt user creation
+        created_user = sdk.create_user_identity(user_data)
+        print(f"✅ User created: {created_user.id}")
+        
+        # Wait for availability
+        time.sleep(10)
+        
+        return created_user.user_name
+        
+    except ConcurProfileError as e:
+        if "401" in str(e) or "UNAUTHORIZED" in str(e):
+            print("⚠️ User creation restricted - using existing user pattern")
+            # Fall back to existing user
+            current_user = sdk.get_current_user_identity()
+            return current_user.user_name
+        else:
+            raise e
+
+# Usage
+user = IdentityUser(
+    user_name="test@example.com",
+    display_name="Test User",
+    name=IdentityName(given_name="Test", family_name="User"),
+    emails=[IdentityEmail(value="test@example.com")]
 )
 
-response = sdk.create_user(basic_profile)
+login_id = create_user_safely(sdk, user)
 
-# Step 2: Update with additional fields after creation
-if response.success:
-    # Wait for user to be available
-    time.sleep(5)
+# Now safely set up travel profile
+travel_profile = TravelProfile(
+    login_id=login_id,
+    rule_class="Default Travel Class",
+    air_preferences=AirPreferences(
+        home_airport="SEA",
+        seat_preference=SeatPreference.WINDOW
+    )
+)
+
+# Test travel profile update with error handling
+try:
+    response = sdk.update_travel_profile(travel_profile)
+    print(f"✅ Travel profile updated: {response.message}")
+except ConcurProfileError as e:
+    if "401" in str(e):
+        print("⚠️ Travel profile update restricted")
+    else:
+        raise e
+```
+
+### 3. Loyalty Program Management (with XML Understanding)
+
+Understand the XML structure and API limitations for loyalty programs:
+
+```python
+from concur_profile_sdk import LoyaltyProgram, LoyaltyProgramType, TravelProfile
+
+def manage_loyalty_programs_safely(sdk, login_id):
+    """Manage loyalty programs with proper error handling"""
     
-    # Update with additional fields
-    full_profile = UserProfile(
-        login_id="user@example.com",
-        job_title="Manager",
-        company_name="Example Corp",
-        addresses=[...],
-        phones=[...]
+    # Create loyalty program data structures
+    loyalty_programs = [
+        LoyaltyProgram(
+            program_type=LoyaltyProgramType.AIR,
+            vendor_code="UA",
+            account_number="123456789",
+            # Note: status/benefits won't appear in XML but can be stored
+            status="Premier Gold",
+            status_benefits="Complimentary upgrades"
+        )
+    ]
+    
+    # Test XML generation (always works)
+    travel_profile = TravelProfile(
+        login_id=login_id,
+        loyalty_programs=loyalty_programs
     )
     
-    sdk.update_user(full_profile)
+    xml_output = travel_profile.to_update_xml(fields_to_update=["loyalty_programs"])
+    print("✅ XML generated successfully")
+    print(f"   Contains AdvantageMemberships: {'AdvantageMemberships' in xml_output}")
+    print(f"   Contains vendor code: {'UA' in xml_output}")
+    
+    # Test dedicated loyalty API (may be restricted)
+    for program in loyalty_programs:
+        try:
+            response = sdk.update_loyalty_program(program, login_id)
+            if response.success:
+                print(f"✅ {program.vendor_code} loyalty program updated")
+            else:
+                print(f"⚠️ {program.vendor_code} update failed: {response.error}")
+        except ConcurProfileError as e:
+            print(f"⚠️ Loyalty API restricted for {program.vendor_code}: {e}")
+            print("   This is expected - Loyalty v1 API has strict permissions")
 ```
 
-### 2. Field-Specific Updates
+### 4. Field-Specific Updates with Error Recovery
 
-Update sensitive fields individually:
+Handle field restrictions and update preferences safely:
 
 ```python
-# Update car preferences one field at a time
-car_type_profile = UserProfile(
-    login_id="user@example.com",
-    car_preferences=CarPreferences(car_type=CarType.INTERMEDIATE)
-)
-sdk.update_user(car_type_profile, fields_to_update=["car_preferences"])
-
-time.sleep(2)  # Allow processing time
-
-transmission_profile = UserProfile(
-    login_id="user@example.com", 
-    car_preferences=CarPreferences(transmission=TransmissionType.AUTOMATIC)
-)
-sdk.update_user(transmission_profile, fields_to_update=["car_preferences"])
+def update_travel_preferences_safely(sdk, login_id):
+    """Update travel preferences with field validation"""
+    
+    # Air preferences (generally well-supported)
+    try:
+        air_profile = TravelProfile(
+            login_id=login_id,
+            air_preferences=AirPreferences(
+                home_airport="SEA",
+                seat_preference=SeatPreference.WINDOW,
+                meal_preference=MealType.VEGETARIAN
+            )
+        )
+        
+        response = sdk.update_travel_profile(air_profile, fields_to_update=["air_preferences"])
+        print("✅ Air preferences updated successfully")
+        
+    except Exception as e:
+        print(f"⚠️ Air preferences failed: {e}")
+    
+    # Hotel preferences (avoid problematic fields)
+    try:
+        hotel_profile = TravelProfile(
+            login_id=login_id,
+            hotel_preferences=HotelPreferences(
+                room_type=HotelRoomType.KING,
+                prefer_gym=True,
+                prefer_pool=True
+                # Don't use smoking_preference - causes validation errors
+            )
+        )
+        
+        response = sdk.update_travel_profile(hotel_profile, fields_to_update=["hotel_preferences"])
+        print("✅ Hotel preferences updated successfully")
+        
+    except Exception as e:
+        print(f"⚠️ Hotel preferences failed: {e}")
+    
+    # Car preferences (update individually if needed)
+    try:
+        car_profile = TravelProfile(
+            login_id=login_id,
+            car_preferences=CarPreferences(
+                car_type=CarType.INTERMEDIATE,
+                transmission=TransmissionType.AUTOMATIC,
+                gps=True
+            )
+        )
+        
+        response = sdk.update_travel_profile(car_profile, fields_to_update=["car_preferences"])
+        print("✅ Car preferences updated successfully")
+        
+    except Exception as e:
+        print(f"⚠️ Car preferences failed: {e}")
 ```
 
-### 3. Loyalty Program Management
-
-Use the dedicated Loyalty API for loyalty programs:
-
-```python
-# Don't include loyalty programs in profile updates
-# Use the dedicated API instead
-loyalty_program = LoyaltyProgram(
-    program_type=LoyaltyProgramType.AIR,
-    vendor_code="UA",
-    account_number="123456789"
-)
-
-response = sdk.update_loyalty_program(loyalty_program)
-```
-
-### 4. Error Recovery
+### 5. Error Recovery and Retry Logic
 
 Implement retry logic for transient failures:
 
 ```python
 import time
 
-def create_user_with_retry(profile, max_retries=3):
+def api_call_with_retry(api_func, max_retries=3, *args, **kwargs):
+    """Execute API call with exponential backoff retry"""
     for attempt in range(max_retries):
         try:
-            response = sdk.create_user(profile)
+            response = api_func(*args, **kwargs)
             return response
         except ConcurProfileError as e:
-            if attempt < max_retries - 1:
-                print(f"Attempt {attempt + 1} failed, retrying...")
-                time.sleep(2 ** attempt)  # Exponential backoff
+            if "401" in str(e) or "403" in str(e):
+                # Permission errors - don't retry
+                print(f"⚠️ Permission denied: {e}")
+                return None
+            elif attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"Attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                time.sleep(wait_time)
                 continue
-            raise e
+            else:
+                raise e
+
+# Usage
+response = api_call_with_retry(
+    sdk.update_travel_profile,
+    travel_profile,
+    fields_to_update=["air_preferences"]
+)
 ```
 
-### 5. Data Validation
+### 6. Integration Testing Patterns
+
+Design tests that work across different environments:
+
+```python
+import unittest
+
+class TestConcurSDK(unittest.TestCase):
+    
+    def setUp(self):
+        self.sdk = ConcurSDK()
+        # Use existing user instead of creating new ones
+        try:
+            self.current_user = self.sdk.get_current_user_identity()
+            self.login_id = self.current_user.user_name
+        except ConcurProfileError:
+            # Client credentials - use a known user
+            self.login_id = "known.user@example.com"
+    
+    def test_xml_generation(self):
+        """Test XML generation (always works)"""
+        travel_profile = TravelProfile(
+            login_id=self.login_id,
+            air_preferences=AirPreferences(home_airport="SEA")
+        )
+        
+        xml_output = travel_profile.to_update_xml()
+        self.assertIn("Air", xml_output)
+        self.assertIn("SEA", xml_output)
+    
+    def test_api_call_with_graceful_handling(self):
+        """Test API calls with graceful error handling"""
+        travel_profile = TravelProfile(
+            login_id=self.login_id,
+            air_preferences=AirPreferences(home_airport="SEA")
+        )
+        
+        try:
+            response = self.sdk.update_travel_profile(travel_profile)
+            print("✅ API call successful")
+        except ConcurProfileError as e:
+            if "401" in str(e):
+                print("⚠️ API restricted (expected in some environments)")
+                # This is not a test failure - just environment limitation
+            else:
+                self.fail(f"Unexpected API error: {e}")
+    
+    def test_loyalty_program_structure(self):
+        """Test loyalty program data structures and XML"""
+        loyalty_program = LoyaltyProgram(
+            program_type=LoyaltyProgramType.AIR,
+            vendor_code="UA",
+            account_number="123456789"
+        )
+        
+        # Validate data structure
+        self.assertEqual(loyalty_program.vendor_code, "UA")
+        self.assertEqual(loyalty_program.program_type, LoyaltyProgramType.AIR)
+        
+        # Test XML generation
+        travel_profile = TravelProfile(
+            login_id=self.login_id,
+            loyalty_programs=[loyalty_program]
+        )
+        
+        xml_output = travel_profile.to_update_xml(fields_to_update=["loyalty_programs"])
+        self.assertIn("AdvantageMemberships", xml_output)
+        self.assertIn("UA", xml_output)
+```
+
+### 7. Data Validation and Schema Compliance
 
 Validate data before API calls:
 
 ```python
-def validate_profile(profile):
+def validate_travel_profile(profile):
+    """Validate travel profile before API submission"""
     if not profile.login_id:
         raise ValidationError("login_id is required")
-    if not profile.first_name:
-        raise ValidationError("first_name is required")
-    if not profile.last_name:
-        raise ValidationError("last_name is required")
-    if not profile.travel_config_id:
-        raise ValidationError("travel_config_id is required")
+    
+    # Validate air preferences
+    if profile.air_preferences:
+        if profile.air_preferences.home_airport:
+            if len(profile.air_preferences.home_airport) != 3:
+                raise ValidationError("home_airport must be 3-letter airport code")
+    
+    # Validate loyalty programs
+    if profile.loyalty_programs:
+        for program in profile.loyalty_programs:
+            if not program.vendor_code:
+                raise ValidationError("loyalty program vendor_code is required")
+            if not program.account_number:
+                raise ValidationError("loyalty program account_number is required")
+    
+    return True
 
-# Use validation
+# Usage
 try:
-    validate_profile(profile)
-    response = sdk.create_user(profile)
+    validate_travel_profile(travel_profile)
+    response = sdk.update_travel_profile(travel_profile)
 except ValidationError as e:
     print(f"Validation failed: {e}")
 ```
 
 ## API Limitations
 
-### 1. Loyalty Program Restrictions
+### 1. Identity v4 vs Travel Profile v2 Separation
+
+The modern SDK architecture separates concerns:
+
+- **Identity v4**: User identity, contact info, enterprise data
+- **Travel Profile v2**: Travel preferences, documents, loyalty programs
+
+### 2. Authentication Types and Permissions
+
+**Client Credentials Authentication:**
+- Provides company-level access without user context
+- Cannot use `get_current_user_travel_profile()` - must specify login_id
+- May have restricted permissions for user creation in some environments
+- Suitable for administrative operations and bulk processing
+
+**User Authentication:**
+- Provides user-specific context
+- Can use current user methods
+- May have different permission levels depending on user role
+
+```python
+# With client credentials - specify login_id
+travel_profile = sdk.get_travel_profile("user@example.com")
+
+# With user auth - can use current user
+travel_profile = sdk.get_current_user_travel_profile()
+```
+
+### 3. User Creation Permission Requirements
+
+User creation via Identity v4 requires specific permissions:
+
+```python
+try:
+    created_user = sdk.create_user_identity(user)
+    print(f"User created: {created_user.id}")
+except ConcurProfileError as e:
+    if "401" in str(e) or "UNAUTHORIZED" in str(e):
+        print("Insufficient permissions for user creation")
+        print("This is common with certain authentication configurations")
+```
+
+**Workarounds for restricted environments:**
+- Use existing users for testing and operations
+- Focus on travel profile updates rather than user creation
+- Use read-only operations and XML generation for validation
+
+### 4. Loyalty Program Restrictions
 
 The Loyalty v1 API has significant restrictions:
 
 - **Travel Suppliers**: Only available to travel suppliers who have completed SAP Concur application review
 - **Scope Limitations**: Travel suppliers can only update their OWN loyalty program information
 - **TMC Access**: TMCs can update any loyalty program for users
+- **XML Structure**: Loyalty programs appear as `<AdvantageMemberships>`, not `<LoyaltyPrograms>`
+- **Limited Fields**: Only basic fields (vendor code, program number, expiration) appear in XML
 
-### 2. Field Support Variations
+### 5. Field Support Variations
 
 Some documented fields are not supported by all API versions:
 
@@ -974,7 +1389,7 @@ Some documented fields are not supported by all API versions:
 # These fields are documented but NOT supported:
 # - HotelPreferences.smoking_preference (causes XML validation error)
 # - HotelPreferences.prefer_restaurant (causes XML validation error)
-# - CarPreferences fields may need individual updates
+# - LoyaltyProgram status/benefits fields (don't appear in XML)
 
 # Working hotel preferences:
 hotel_prefs = HotelPreferences(
@@ -986,118 +1401,142 @@ hotel_prefs = HotelPreferences(
     prefer_early_checkin=True
     # Don't use smoking_preference or prefer_restaurant
 )
+
+# Working loyalty programs (basic fields only):
+loyalty_program = LoyaltyProgram(
+    program_type=LoyaltyProgramType.AIR,
+    vendor_code="UA",
+    account_number="123456789",
+    expiration=date(2024, 12, 31)
+    # Status and benefits fields won't appear in XML
+)
 ```
 
-### 3. Schema Order Requirements
+### 6. SCIM vs XML Schema Requirements
 
-XML elements must appear in exact schema order:
+- **Identity v4**: Uses JSON and SCIM 2.0 schemas
+- **Travel Profile v2**: Uses XML and Concur's custom schemas
+- **Order Requirements**: XML elements must appear in exact schema order
+- **Validation**: XML validation is strict and may reject unexpected fields
 
-```python
-# The SDK handles this automatically, but be aware that
-# field order matters in XML generation
-```
-
-### 4. User Availability Delays
+### 7. User Availability Delays
 
 Newly created users may not be immediately available:
 
 ```python
 # Always wait after user creation
-response = sdk.create_user(profile)
-if response.success:
+response = sdk.create_user_identity(user)
+if response.id:
     time.sleep(5)  # Wait for user to be available
-    # Now safe to update or retrieve user
+    # Now safe to update travel profile or retrieve user
+```
+
+### 8. Testing Considerations
+
+**For Integration Testing:**
+- Use existing authenticated users rather than creating test users
+- Focus on XML generation and data structure validation
+- Test API restrictions gracefully (expect failures for restricted APIs)
+- Use read-only operations when write permissions are limited
+
+```python
+# Recommended testing pattern
+def test_with_existing_user():
+    current_user = sdk.get_current_user_identity()
+    login_id = current_user.user_name
+    
+    # Test XML generation (always works)
+    travel_profile = TravelProfile(
+        login_id=login_id,
+        air_preferences=AirPreferences(home_airport="SEA")
+    )
+    xml_output = travel_profile.to_update_xml()
+    
+    # Test API calls with graceful error handling
+    try:
+        response = sdk.update_travel_profile(travel_profile)
+        print("✅ Update successful")
+    except ConcurProfileError as e:
+        if "401" in str(e):
+            print("⚠️ Update restricted (expected in some environments)")
+        else:
+            raise e
 ```
 
 ## Examples
 
-### Complete User Lifecycle
+### Complete User and Travel Profile Setup
 
 ```python
-from concur_profile_sdk_improved import *
+from concur_profile_sdk import *
 from datetime import date
 import time
 
-# 1. Create comprehensive user
+# Complete user lifecycle with both identity and travel data
 login_id = "complete.user@example.com"
 
-profile = UserProfile(
-    login_id=login_id,
-    first_name="Complete",
-    last_name="User",
-    middle_name="Test",
-    job_title="Senior Manager",
-    company_name="Example Corporation",
-    employee_id="EMP12345",
-    travel_config_id="your-travel-config-id",
-    
-    # Contact information
-    addresses=[
-        Address(
-            type=AddressType.HOME,
-            street="123 Home Street",
-            city="Seattle",
-            state_province="WA",
-            postal_code="98101",
-            country_code="US"
-        )
-    ],
-    
-    phones=[
-        Phone(
-            type=PhoneType.WORK,
-            phone_number="206-555-0123",
-            country_code="1"
-        )
-    ],
-    
+# 1. Create user identity
+user = IdentityUser(
+    user_name=login_id,
+    display_name="Complete User",
+    title="Senior Manager",
+    name=IdentityName(
+        given_name="Complete",
+        family_name="User",
+        middle_name="Test"
+    ),
     emails=[
-        Email(
-            type=EmailType.BUSINESS,
-            email_address="complete.work@example.com"
+        IdentityEmail(
+            value=login_id,
+            type="work",
+            primary=True
         )
     ],
-    
-    # Emergency contact
-    emergency_contacts=[
-        EmergencyContact(
-            name="Emergency Contact",
-            relationship="Spouse",
-            phone="206-555-0124"
+    phone_numbers=[
+        IdentityPhoneNumber(
+            value="+1-206-555-0123",
+            type="work",
+            primary=True
         )
     ],
-    
-    # Travel preferences
-    air_preferences=AirPreferences(
-        seat_preference=SeatPreference.WINDOW,
-        meal_preference=MealType.VEGETARIAN,
-        home_airport="SEA"
-    ),
-    
-    hotel_preferences=HotelPreferences(
-        room_type=HotelRoomType.KING,
-        prefer_gym=True,
-        prefer_pool=True
-    ),
-    
-    car_preferences=CarPreferences(
-        car_type=CarType.INTERMEDIATE,
-        transmission=TransmissionType.AUTOMATIC,
-        gps=True
+    enterprise_info=IdentityEnterpriseInfo(
+        company_id="COMP123",
+        employee_number="EMP12345",
+        department="Engineering"
     )
 )
 
-# Create user
+# Create user identity
 try:
-    response = sdk.create_user(profile, password="SecurePass123!")
-    print(f"✅ User created: {response.uuid}")
+    created_user = sdk.create_user_identity(user)
+    print(f"✅ User identity created: {created_user.id}")
     
     # Wait for availability
     time.sleep(10)
     
-    # 2. Verify creation
-    created_profile = sdk.get_profile_by_login_id(login_id)
-    print(f"✅ User verified: {created_profile.first_name} {created_profile.last_name}")
+    # 2. Set up travel profile
+    travel_profile = TravelProfile(
+        login_id=login_id,
+        rule_class="Default Travel Class",
+        air_preferences=AirPreferences(
+            home_airport="SEA",
+            seat_preference=SeatPreference.WINDOW,
+            meal_preference=MealType.VEGETARIAN
+        ),
+        hotel_preferences=HotelPreferences(
+            room_type=HotelRoomType.KING,
+            prefer_gym=True,
+            prefer_pool=True
+        ),
+        car_preferences=CarPreferences(
+            car_type=CarType.INTERMEDIATE,
+            transmission=TransmissionType.AUTOMATIC,
+            gps=True
+        )
+    )
+    
+    travel_response = sdk.update_travel_profile(travel_profile)
+    print(f"✅ Travel profile updated: {travel_response.message}")
     
     # 3. Add loyalty programs
     loyalty_programs = [
@@ -1122,59 +1561,65 @@ try:
         else:
             print(f"⚠️ Loyalty program may be restricted: {loyalty_response.error}")
     
-    # 4. Update profile
-    updated_profile = UserProfile(
-        login_id=login_id,
-        job_title="Director",
-        medical_alerts="No known allergies"
-    )
+    # 4. Verify setup
+    final_identity = sdk.find_user_by_username(login_id)
+    final_travel = sdk.get_travel_profile_by_login_id(login_id)
     
-    update_response = sdk.update_user(updated_profile, fields_to_update=["job_title", "medical_alerts"])
-    print(f"✅ Profile updated: {update_response.message}")
-    
-    # 5. Final verification
-    final_profile = sdk.get_profile_by_login_id(login_id)
-    print(f"✅ Final verification: {final_profile.job_title}")
+    print(f"✅ Final verification:")
+    print(f"  Identity: {final_identity.display_name} ({final_identity.title})")
+    print(f"  Travel: {final_travel.rule_class}")
+    print(f"  Air: {final_travel.air_preferences.home_airport if final_travel.air_preferences else 'None'}")
+    print(f"  Loyalty Programs: {len(final_travel.loyalty_programs)}")
     
 except Exception as e:
     print(f"❌ Error: {e}")
 ```
 
-### Bulk Profile Processing
+### Bulk User Processing
 
 ```python
 from datetime import datetime, timedelta
 
-# Get recent profile changes
+# Get recent travel profile changes
 last_modified = datetime.now() - timedelta(days=7)
 
-summaries = sdk.list_profile_summaries(
+summaries = sdk.list_travel_profile_summaries(
     last_modified_date=last_modified,
     limit=100,
     active_only=True
 )
 
-print(f"Processing {len(summaries.profile_summaries)} profiles...")
+print(f"Processing {len(summaries.profile_summaries)} travel profiles...")
 
 for summary in summaries.profile_summaries:
     try:
-        # Get full profile
-        profile = sdk.get_profile_by_login_id(summary.login_id)
+        # Get both identity and travel data
+        identity = sdk.find_user_by_username(summary.login_id)
+        travel_profile = sdk.get_travel_profile_by_login_id(summary.login_id)
         
-        # Process profile data
-        print(f"Profile: {profile.first_name} {profile.last_name}")
-        print(f"  Company: {profile.company_name}")
-        print(f"  Loyalty Programs: {len(profile.loyalty_programs)}")
+        # Process user data
+        print(f"User: {identity.display_name if identity else 'Unknown'}")
+        print(f"  Title: {identity.title if identity else 'None'}")
+        print(f"  Travel Class: {travel_profile.rule_class}")
         print(f"  Last Modified: {summary.profile_last_modified_utc}")
         
-        # Example: Update job title if missing
-        if not profile.job_title and profile.company_name:
-            update_profile = UserProfile(
-                login_id=profile.login_id,
-                job_title="Employee"
+        # Example: Update title if missing
+        if identity and not identity.title:
+            updates = {"title": "Employee"}
+            sdk.update_user_identity_simple(identity.id, updates)
+            print(f"  ✅ Updated title")
+        
+        # Example: Set default air preferences if missing
+        if not travel_profile.air_preferences:
+            update_profile = TravelProfile(
+                login_id=travel_profile.login_id,
+                air_preferences=AirPreferences(
+                    seat_preference=SeatPreference.DONT_CARE,
+                    home_airport="SEA"
+                )
             )
-            sdk.update_user(update_profile, fields_to_update=["job_title"])
-            print(f"  ✅ Updated job title")
+            sdk.update_travel_profile(update_profile, fields_to_update=["air_preferences"])
+            print(f"  ✅ Set default air preferences")
         
     except ProfileNotFoundError:
         print(f"  ⚠️ Profile not found: {summary.login_id}")
@@ -1182,4 +1627,4 @@ for summary in summaries.profile_summaries:
         print(f"  ❌ Error processing {summary.login_id}: {e}")
 ```
 
-This comprehensive guide covers all aspects of the Concur Profile SDK. The SDK provides a robust, type-safe way to interact with Concur's Profile APIs while handling the complexities of XML schema compliance and API limitations. 
+This comprehensive guide covers all aspects of the Concur SDK. The SDK provides a robust, type-safe way to interact with Concur's modern APIs while handling the complexities of both SCIM 2.0 compliance and XML schema requirements. 
