@@ -719,22 +719,20 @@ def tool_handler(tool_calls):
     return tool_results
 
 def chat_with_bot(message, history):
-    """Main chat function for Gradio interface"""
+    """Main chat function for Gradio interface - non-streaming version"""
     global conversation_history
     
     if not sdk or not client:
-        return history + [{"role": "assistant", "content": "❌ Error: Bot not initialized. Please check the status panel."}]
+        history.append({"role": "assistant", "content": "❌ Error: Bot not initialized. Please check the status panel."})
+        return history
     
-    # Add user message to conversation
-    conversation_history.append({
-        "role": "user",
-        "content": message
-    })
+    # Add user message to conversation history and display history
+    conversation_history.append({"role": "user", "content": message})
+    history.append({"role": "user", "content": message})
     
     try:
         # Process with Claude
         has_tool_calls = True
-        assistant_response = ""
         
         while has_tool_calls:
             # Get response from Claude
@@ -746,19 +744,13 @@ def chat_with_bot(message, history):
                 max_tokens=2048
             )
             
-            # Add Claude's response to conversation
-            conversation_history.append({
-                "role": "assistant",
-                "content": response.content
-            })
-            
-            # Process response content
+            # Process the response
+            assistant_content = ""
             tool_calls = []
-            content_text = ""
             
             for content_block in response.content:
                 if content_block.type == "text":
-                    content_text += content_block.text
+                    assistant_content += content_block.text
                 elif content_block.type == "tool_use":
                     tool_calls.append({
                         "id": content_block.id,
@@ -766,23 +758,29 @@ def chat_with_bot(message, history):
                         "input": content_block.input
                     })
             
-            # Accumulate assistant response
-            if content_text:
-                assistant_response += content_text
+            # Add Claude's response to conversation history (this includes both text and tool_use blocks)
+            conversation_history.append({
+                "role": "assistant", 
+                "content": response.content
+            })
+            
+            # Add text response to display history if there is any
+            if assistant_content:
+                history.append({"role": "assistant", "content": assistant_content})
             
             # Handle tool calls if any
             if tool_calls:
-                # Add tool usage indicator
+                # Show tool usage in display
                 tool_names = [tc["name"] for tc in tool_calls]
-                assistant_response += f"\n\n🔧 *Using tools: {', '.join(tool_names)}*\n"
+                history.append({"role": "assistant", "content": f"🔧 Using tools: {', '.join(tool_names)}"})
                 
                 # Execute tools
                 tool_results = tool_handler(tool_calls)
                 
-                # Add tool results to conversation
-                tool_result_content = []
+                # Add tool results to conversation in the correct format
+                tool_result_blocks = []
                 for result in tool_results:
-                    tool_result_content.append({
+                    tool_result_blocks.append({
                         "type": "tool_result",
                         "tool_use_id": result["tool_call_id"],
                         "content": json.dumps(result["output"])
@@ -790,19 +788,20 @@ def chat_with_bot(message, history):
                 
                 conversation_history.append({
                     "role": "user",
-                    "content": tool_result_content
+                    "content": tool_result_blocks
                 })
+                
+                # Update tool usage message in display
+                history[-1] = {"role": "assistant", "content": f"✅ Used tools: {', '.join(tool_names)}"}
+                
+                # Continue the loop for Claude's response to tool results
             else:
                 has_tool_calls = False
         
-        # Update chat history with new message format
-        history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": assistant_response})
         return history
         
     except Exception as e:
         error_msg = f"❌ Error: {str(e)}"
-        history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": error_msg})
         return history
 
@@ -930,15 +929,24 @@ def create_interface():
                 • "What loyalty programs do I have?"
                 """)
         
-        # Event handlers
+        # Event handlers - non-streaming
         def submit_message(message, history):
             if message.strip():
                 return chat_with_bot(message, history), ""
             return history, message
         
         # Submit on Enter or button click
-        msg.submit(submit_message, [msg, chatbot], [chatbot, msg])
-        submit_btn.click(submit_message, [msg, chatbot], [chatbot, msg])
+        msg.submit(
+            submit_message, 
+            [msg, chatbot], 
+            [chatbot, msg]
+        )
+        
+        submit_btn.click(
+            submit_message, 
+            [msg, chatbot], 
+            [chatbot, msg]
+        )
         
         # Quick action buttons
         profile_btn.click(lambda: quick_action_profile(), outputs=msg)
